@@ -17,3 +17,8 @@ class JValueTypeManifest extends TypeManifest[JValue, JValue]
   def defaultKey():JValue = JNothing
   def defaultValue():JValue = JNothing
 }
+
+object JValueTypeManifest
+{
+  def apply()=new JValueTypeManifest
+}

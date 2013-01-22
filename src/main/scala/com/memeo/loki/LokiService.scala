@@ -48,7 +48,7 @@ class LokiService(val dbDir:File) extends Actor
               sender ! (ctx, Response(NOT_FOUND, ("result" -> JString("error")) ~ ("reason" -> JString("no_db_file")) ~ Nil, JObject(List())))
             else {
               val container = DBMaker.newFileDB(dbFile).readOnly().make()
-              val db = container.getTreeMap("*main")
+              val db = container.getTreeMap("*main", false, JValueTypeManifest())
               sender ! (ctx, Response(OK, ("db_name" -> JString(name)) ~ ("disk_size" -> JInt(dbFile.length())) ~ ("doc_count" -> JInt(db.size())) ~ Nil, JObject(List())))
               container.close()
             }
@@ -56,7 +56,7 @@ class LokiService(val dbDir:File) extends Actor
           case POST => {
             val dbFile = new File(dbDir, name + ".ldb")
             val container = DBMaker.newFileDB(dbFile).make()
-            container.createTreeMap[JValue, JValue]("*main", 8, true, new JValueKeySerializer, new JValueSerializer, new JValueComparator)
+            container.createTreeMap[JValue, JValue]("*main", 8, true, new JValueKeySerializer, new JValueSerializer, new ValueComparator, JValueTypeManifest())
             sender ! (ctx, Response(OK, ("result" -> JString("OK")) ~ ("created" -> JBool(true)) ~ Nil, JObject(List())))
             container.close()
           }

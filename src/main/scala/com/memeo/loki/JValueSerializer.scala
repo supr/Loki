@@ -20,7 +20,7 @@ import java.io.{DataOutput, DataInput}
  * Time: 1:30 PM
  * To change this template use File | Settings | File Templates.
  */
-class JValueSerializer extends Serializer[JValue]
+object JValueSerializer
 {
   val defaultSerializer = Serializer.BASIC_SERIALIZER
 
@@ -32,8 +32,12 @@ class JValueSerializer extends Serializer[JValue]
       case i:JInt => i.values.underlying
       case f:JDouble => f.values
       case s:JString => s.values
-      case a:JArray => WrapAsJava.seqAsJavaList(a.children.map(unpack))
-      case o:JObject => WrapAsJava.mapAsJavaMap(o.values.map((e) => (e._1 -> unpack(e._2.asInstanceOf[JValue]))))
+      case a:JArray => new java.util.ArrayList(WrapAsJava.seqAsJavaList(a.children.map(unpack)))
+      case o:JObject => {
+        val m = new java.util.LinkedHashMap[String, Any]()
+        m.putAll(WrapAsJava.mapAsJavaMap(o.values.map((e) => (e._1 -> unpack(e._2.asInstanceOf[JValue])))))
+        m
+      }
     }
   }
 

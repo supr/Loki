@@ -16,7 +16,7 @@ class JValueKeySerializer extends Serializer[Array[JValue]]
   val valueSerializer = new JValueSerializer
 
   def serialize(out: DataOutput, value: Array[JValue]) = {
-      valueSerializer.serialize(out, JArray(a.toList))
+      valueSerializer.serialize(out, JArray(value.toList))
   }
 
   def deserialize(in: DataInput, available: Int): Array[JValue] = {
