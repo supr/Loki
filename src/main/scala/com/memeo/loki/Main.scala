@@ -17,8 +17,14 @@ import java.io.File
  */
 object Main
 {
+  class conf extends ClusterConfig
+  {
+    override val i = 0
+    override val n = 1
+    override val peers = Map(0 -> Self(0, "loki"))
+  }
   val system = ActorSystem("loki")
-  val service = system.actorOf(Props(new LokiService(new File("loki"))), name = "loki")
+  val service = system.actorOf(Props(new LokiService(new File("loki"), new conf())), name = "loki")
   val bootstrap = new ServerBootstrap(new NioServerSocketChannelFactory(Executors.newCachedThreadPool(), Executors.newCachedThreadPool()))
   bootstrap.setPipelineFactory(new HttpServerPipelineFactory(service, system))
   bootstrap.bind(new InetSocketAddress(8080))

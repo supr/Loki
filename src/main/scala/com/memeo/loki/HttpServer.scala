@@ -92,6 +92,7 @@ class HttpServer(val upstream:ActorRef, system:ActorSystem) extends SimpleChanne
   override def messageReceived(ctx:ChannelHandlerContext, e:MessageEvent) = {
     e.getMessage match {
       case req:HttpRequest => {
+        logger.info("{} {}", req.getMethod, req.getUri)
         if (req.isChunked) {
           val uri = new URI(req.getUri)
           val partial:Request = Request(req.getMethod, uri.getPath, JNothing, getHeaders(req.getHeaders), parseQuery(uri.getQuery))

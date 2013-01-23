@@ -1,6 +1,6 @@
 package com.memeo.loki
 
-import net.liftweb.json.JsonAST.{JObject, JValue}
+import net.liftweb.json.JsonAST.{JString, JArray, JObject, JValue}
 import org.jboss.netty.handler.codec.http.HttpMethod
 
 /**
@@ -12,6 +12,9 @@ import org.jboss.netty.handler.codec.http.HttpMethod
  */
 class Request(val method:HttpMethod, val name:String, val value:JValue, val headers:JObject, val params:JObject)
 {
+  def toValue:JValue = {
+    JArray(List(JString(method.getName), JString(name), value, headers, params))
+  }
 }
 
 object Request
