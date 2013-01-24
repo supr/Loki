@@ -1,6 +1,6 @@
 package com.memeo.loki
 
-import net.liftweb.json.JsonAST.{JObject, JValue}
+import net.liftweb.json.JsonAST.{JArray, JInt, JObject, JValue}
 import org.jboss.netty.handler.codec.http.HttpResponseStatus
 
 /**
@@ -12,6 +12,7 @@ import org.jboss.netty.handler.codec.http.HttpResponseStatus
  */
 class Response(val status:HttpResponseStatus, val value:JValue, val headers:JObject)
 {
+  def toValue():JValue = JArray(List(JInt(status.getCode), value, headers))
 }
 
 object Response

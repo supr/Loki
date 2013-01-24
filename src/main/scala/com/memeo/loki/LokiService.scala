@@ -48,7 +48,7 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
   implicit val timeout = Timeout(30 seconds)
 
   def receive = {
-    case (ctx:Any, request:Request) => {
+    case request:Request => {
       try {
         request.name.split('/').toList.filter(p => p.length > 0) match {
 
@@ -56,51 +56,56 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
           case List() => request.method match {
             case GET => {
               val s:Self = config.peers.values.find(m => m.isInstanceOf[Self]).get.asInstanceOf[Self]
-              sender ! (ctx, Response(OK, ("version" -> "0.0.1-SNAPSOT") ~ ("peer" -> JInt(s.id)) ~ ("n" -> JInt(config.n)) ~ ("i" -> JInt(config.i)) ~ Nil, JObject(List())))
+              sender ! Response(OK, ("version" -> "0.0.1-SNAPSOT") ~ ("peer" -> JInt(s.id)) ~ ("n" -> JInt(config.n)) ~ ("i" -> JInt(config.i)) ~ Nil, JObject(List()))
             }
-            case _ => sender ! (ctx, Response(METHOD_NOT_ALLOWED, JNothing, JObject(List())))
+            case _ => sender ! Response(METHOD_NOT_ALLOWED, JNothing, JObject(List()))
           }
 
           // List all DBs.
           case List("_all_dbs") => request.method match {
             case GET => {
-              config.peers.values.foldLeft[Future[List[String]]](future { List[String]() })((f:Future[List[String]], m) => {
-                f.flatMap(l => m match {
-                  case s:Self => {
-                    logger.info("_all_dbs query self")
-                    future {
-                      val x = listDbs()
-                      logger.info("_all_dbs local list {}", x)
-                      l ++ x
-                    }
+              logger.info("params: {}", request.params)
+              Future.sequence(config.peers.values.map(m => m match {
+                case s:Self => {
+                  logger.info("_all_dbs query self dir:{}", dbDir)
+                  future {
+                    val x = listDbs()
+                    logger.info("_all_dbs local list {}", x)
+                    x
                   }
-                  case p:Peer => {
-                    logger.info("_all_dbs query peer {} {}", p.id, p.ipcAddr)
-                    if (request.params \ "recurse" != JBool(false))
-                    {
-                      val nextReq = Request(request.method, request.name, JNothing, request.headers,
+                }
+                case p:Peer => {
+                  logger.info("_all_dbs query peer {} {} {}", p.id, p.ipcAddr, request.params \ "recurse")
+                  request.params \ "recurse" match {
+                    case JBool(false) => {
+                      logger.info("skip calling peer {}", p.ipcAddr)
+                      future { List[String]() }
+                    }
+                    case x => {
+                      logger.info("recursively calling peers because {}", x)
+                      val nextReq = Request(request.method, request.name, JNull, request.headers,
                         request.params ~ ("recurse" -> JBool(false)))
+                      logger.info("next params {}", nextReq.params)
                       implicit val formats = DefaultFormats
                       implicit val system = context.system
                       context.system.actorOf(Props(new RemoteLoki(p))) ? nextReq map {
                         x => x match {
                           case r:Response => r.value match {
-                            case a:JArray => l ++ a.extract[List[String]]
+                            case a:JArray => a.extract[List[String]]
                           }
                         }
                       }
                     }
-                    else future { l }
                   }
-                })
-              }) map {
-                l => {
-                  logger.info("_all_dbs collected {}", l)
-                  (ctx, Response(OK, JArray(l.map(JString)), JObject(List())))
+                }
+              })) map {
+                ll => {
+                  val dblist = JArray((for (l <- ll; e <- l) yield JString(e)).toList)
+                  Response(OK, dblist, JObject(List()))
                 }
               } pipeTo sender
             }
-            case _ => sender ! (ctx, Response(METHOD_NOT_ALLOWED, JNothing, JObject(List())))
+            case _ => sender ! Response(METHOD_NOT_ALLOWED, JNothing, JObject(List()))
           }
 
           // Access values for a single container.
@@ -112,13 +117,13 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                   case s:Self => {
                     val dbFile = new File(dbDir, name + ".ldb")
                     if (!dbFile.exists()) {
-                      sender ! (ctx, Response(NOT_FOUND, ("result" -> JString("error")) ~ ("reason" -> JString("no_db_file")) ~ Nil, JObject(List())))
+                      sender ! Response(NOT_FOUND, ("result" -> JString("error")) ~ ("reason" -> JString("no_db_file")) ~ Nil, JObject(List()))
                     } else {
                       val container = DBMaker.newRandomAccessFileDB(dbFile).readOnly().make()
                       try
                       {
                         val db = container.getTreeMap[String, Value]("_main", true)
-                        sender ! (ctx, Response(OK, ("db_name" -> JString(name)) ~ ("disk_size" -> JInt(dbFile.length())) ~ ("doc_count" -> JInt(db.size())) ~ Nil, JObject(List())))
+                        sender ! Response(OK, ("db_name" -> JString(name)) ~ ("disk_size" -> JInt(dbFile.length())) ~ ("doc_count" -> JInt(db.size())) ~ Nil, JObject(List()))
                       }
                       finally
                       {
@@ -144,14 +149,14 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                       val m = container.createTreeMap[String, Value]("_main", 8, true, null, null, new StringComparator)
                       //m.put("_version", "1")
                       container.commit()
-                      sender ! (ctx, Response(OK, ("result" -> JString("OK")) ~ ("created" -> JBool(true)) ~ Nil, JObject(List())))
+                      sender ! Response(OK, ("result" -> JString("OK")) ~ ("created" -> JBool(true)) ~ Nil, JObject(List()))
                     }
                     catch
                     {
                       case iae:IllegalArgumentException => {
-                        sender ! (ctx, Response(PRECONDITION_FAILED,
+                        sender ! Response(PRECONDITION_FAILED,
                           ("result" -> JString("error")) ~ ("reason" -> JString("the database already exists")) ~ Nil,
-                          JObject(List())))
+                          JObject(List()))
                       }
                     }
                     finally
@@ -170,13 +175,13 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
               dbDir.listFiles(new FilenameFilter {
                 def accept(dir: File, fname: String): Boolean = fname.startsWith(name + ".ldb")
               }).foreach(f => f.delete())
-              sender ! (ctx, Response(OK, ("result" -> JString("ok")) ~ Nil, JObject(List())))
+              sender ! Response(OK, ("result" -> JString("ok")) ~ Nil, JObject(List()))
             }
-            case _ => sender ! (ctx, Response(METHOD_NOT_ALLOWED, JNothing, JObject(List())))
+            case _ => sender ! Response(METHOD_NOT_ALLOWED, JNothing, JObject(List()))
           }
 
           case List(dbname:String, "_design", dname:String) => {
-            sender ! (ctx, Response(NOT_IMPLEMENTED, JNothing, JObject(List())))
+            sender ! Response(NOT_IMPLEMENTED, JNothing, JObject(List()))
           }
 
           // A document in a container.
@@ -187,9 +192,9 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                   val dbfile = new File(dbDir, dbname + ".ldb")
                   if (!dbfile.exists())
                   {
-                    sender ! (ctx, Response(NOT_FOUND,
-                                            ("result" -> JString("error")) ~ ("reason" -> JString("no_db_file")) ~ Nil,
-                                            JObject(List())))
+                    sender ! Response(NOT_FOUND,
+                                      ("result" -> JString("error")) ~ ("reason" -> JString("no_db_file")) ~ Nil,
+                                      JObject(List()))
                   }
                   else
                   {
@@ -199,11 +204,11 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                       val db = container.getTreeMap[String, Value]("_main")
                       db.get(docname) match {
                         case null =>
-                          sender ! (ctx, Response(NOT_FOUND,
-                            ("result" -> JString("error")) ~ ("reason" -> JString("not_found")) ~ Nil,
-                            JObject(List())))
+                          sender ! Response(NOT_FOUND,
+                                            ("result" -> JString("error")) ~ ("reason" -> JString("not_found")) ~ Nil,
+                                            JObject(List()))
                         case v:Value => {
-                          sender ! (ctx, Response(OK, v.toObject, JObject(List())))
+                          sender ! Response(OK, v.toObject, JObject(List()))
                         }
                       }
                     }
@@ -231,19 +236,20 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
               }
             }
           }
-          case _ => sender ! (ctx, Response(NOT_FOUND, ("result" -> JString("error")) ~ ("reason" -> JString("not found")) ~ Nil,
-            JObject(List())))
+          case _ => sender ! Response(NOT_FOUND,
+                                      ("result" -> JString("error")) ~ ("reason" -> JString("not found")) ~ Nil,
+                                      JObject(List()))
         }
       } catch {
         case e:Exception => {
           logger.warning("exception handling request {}", e)
           e.printStackTrace()
-          sender ! (ctx, Response(INTERNAL_SERVER_ERROR, ("result" -> JString("error")) ~ ("reason" -> JString(e.toString)) ~ Nil, JObject(List())))
+          sender ! Response(INTERNAL_SERVER_ERROR, ("result" -> JString("error")) ~ ("reason" -> JString(e.toString)) ~ Nil, JObject(List()))
         }
         case e:IOError => {
           logger.warning("error handling request {}", e)
           e.printStackTrace()
-          sender ! (ctx, Response(INTERNAL_SERVER_ERROR, ("result" -> JString("error")) ~ ("reason" -> JString(e.toString)) ~ Nil, JObject(List())))
+          sender ! Response(INTERNAL_SERVER_ERROR, ("result" -> JString("error")) ~ ("reason" -> JString(e.toString)) ~ Nil, JObject(List()))
         }
       }
     }

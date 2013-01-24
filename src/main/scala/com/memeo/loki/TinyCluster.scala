@@ -27,7 +27,7 @@ object TinyCluster
   val bootstrap1 = new ServerBootstrap(new NioServerSocketChannelFactory(Executors.newCachedThreadPool(), Executors.newCachedThreadPool()))
   bootstrap1.setPipelineFactory(new HttpServerPipelineFactory(service1, system1))
   bootstrap1.bind(new InetSocketAddress(8080))
-  val reqSocket1 = ZeroMQExtension(system1).newRepSocket(Array(Bind("tcp://0.0.0.0:7777"), Listener(system1.actorOf(Props(new LokiIPCActor(service1)), name="zmq-ipc1"))))
+  val reqSocket1 = ZeroMQExtension(system1).newRepSocket(Array(Bind("tcp://127.0.0.1:7777"), Listener(system1.actorOf(Props(new LokiIPCActor(service1)), name="zmq-ipc1"))))
 
   val config2 = new ClusterConfig {
     val n: Int = 3
@@ -41,7 +41,7 @@ object TinyCluster
   val bootstrap2 = new ServerBootstrap(new NioServerSocketChannelFactory(Executors.newCachedThreadPool(), Executors.newCachedThreadPool()))
   bootstrap2.setPipelineFactory(new HttpServerPipelineFactory(service2, system2))
   bootstrap2.bind(new InetSocketAddress(8081))
-  val reqSocket2 = ZeroMQExtension(system2).newRepSocket(Array(Bind("tcp://0.0.0.0:7778"), Listener(system2.actorOf(Props(new LokiIPCActor(service2)), name="zmq-ipc2"))))
+  val reqSocket2 = ZeroMQExtension(system2).newRepSocket(Array(Bind("tcp://127.0.0.1:7778"), Listener(system2.actorOf(Props(new LokiIPCActor(service2)), name="zmq-ipc2"))))
 
   val config3 = new ClusterConfig {
     val n: Int = 3
@@ -55,5 +55,5 @@ object TinyCluster
   val bootstrap3 = new ServerBootstrap(new NioServerSocketChannelFactory(Executors.newCachedThreadPool(), Executors.newCachedThreadPool()))
   bootstrap3.setPipelineFactory(new HttpServerPipelineFactory(service3, system3))
   bootstrap3.bind(new InetSocketAddress(8082))
-  val reqSocket3 = ZeroMQExtension(system3).newRepSocket(Array(Bind("tcp://0.0.0.0:7779"), Listener(system3.actorOf(Props(new LokiIPCActor(service3)), name="zmq-ipc3"))))
+  val reqSocket3 = ZeroMQExtension(system3).newRepSocket(Array(Bind("tcp://127.0.0.1:7779"), Listener(system3.actorOf(Props(new LokiIPCActor(service3)), name="zmq-ipc3"))))
 }

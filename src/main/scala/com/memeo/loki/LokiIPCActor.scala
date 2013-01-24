@@ -1,7 +1,8 @@
 package com.memeo.loki
 
 import akka.actor.{ActorRef, Actor}
-import akka.zeromq.{Frame, ZMQMessage}
+import akka.pattern.{ask, pipe}
+import akka.zeromq.{Connecting, Closed, Frame, ZMQMessage}
 import net.liftweb.json.JsonParser
 import net.liftweb.json.JsonAST._
 import net.liftweb.json.JsonAST.JString
@@ -10,6 +11,10 @@ import net.liftweb.json.JsonAST.JObject
 import net.liftweb.json.Printer.compact
 import akka.event.Logging
 import java.io.{ByteArrayInputStream, InputStreamReader}
+import akka.util.Timeout
+import concurrent.duration._
+import concurrent.Await
+import akka.actor.Status.Failure
 
 /**
  * Created with IntelliJ IDEA.
@@ -21,20 +26,37 @@ import java.io.{ByteArrayInputStream, InputStreamReader}
 class LokiIPCActor(val service:ActorRef) extends Actor
 {
   val logger = Logging(context.system, classOf[LokiIPCActor])
+  implicit val timeout:Timeout = Timeout(30 seconds)
 
   def receive = {
     case m:ZMQMessage => {
-      logger.info("received message {}", m)
+      import context.dispatcher
+      logger.info("received message {} sender={}", m, sender)
       JsonParser.parse(new InputStreamReader(new ByteArrayInputStream(m.frames(1).payload.toArray))) match {
-        case JArray(List(method:JString, uri:JString, params:JObject, headers:JObject, value:JValue)) =>
-          service ! (sender, Request(method.values, uri.values, value, headers, params))
+        case JArray(List(method:JString, uri:JString, value:JValue, headers:JObject, params:JObject)) =>
+          val reply = Await.result(service ? Request(method.values, uri.values, value, headers, params) map {
+            x => x match {
+              case r:Response => {
+                logger.info("got response {}, forwarding back {}", r.toValue(), sender)
+                ZMQMessage(List(Frame(Array[Byte]()), Frame(compact(render(r.toValue())))))
+              }
+              case x => {
+                logger.warning("unexpected reply {}", x)
+                Failure(new IllegalArgumentException("unexpected reply type"))
+              }
+            }
+          }, 30 seconds)
+          logger.info("sending reply {} {}", reply, sender)
+          sender ! reply
       }
     }
 
-    case (upstream:ActorRef, resp:Response) => {
-      val reply = JArray(List(JInt(resp.status.getCode),
-        resp.headers, resp.value))
-      upstream ! new ZMQMessage(new Frame(compact(render(reply))))
+    case Connecting => {
+      logger.info("req connecting")
+    }
+
+    case Closed => {
+      logger.info("req closed")
     }
   }
 }

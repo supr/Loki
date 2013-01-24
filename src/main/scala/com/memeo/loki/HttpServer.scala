@@ -2,6 +2,7 @@ package com.memeo.loki
 
 import org.jboss.netty.channel._
 import akka.actor.{Props, ActorSystem, ActorRef, Actor}
+import akka.pattern.ask
 import org.jboss.netty.handler.codec.http._
 import net.liftweb.json.JsonAST._
 import net.liftweb.json.Printer.compact
@@ -12,62 +13,52 @@ import java.io.{PrintWriter, StringWriter, InputStreamReader}
 import java.net.URI
 import collection.mutable.ListBuffer
 import java.net.URLDecoder._
-import net.liftweb.json.JsonAST.JObject
-import net.liftweb.json.JsonAST.JField
 import java.util
 import akka.event.Logging
 import net.liftweb.json.JsonAST.JObject
 import scala.Some
 import net.liftweb.json.JsonAST.JField
 import net.liftweb.json.JsonAST.JString
+import akka.util.Timeout
+import concurrent.duration._
 
 object HttpServer
 {
   val utf8 = Charset.forName("UTF-8")
 }
 
-class HttpActor extends Actor
+class HttpActor(val service:ActorRef) extends Actor
 {
+  implicit val timeout:Timeout = Timeout(30 seconds)
 
   def receive = {
-    case (upstream:ActorRef, e:MessageEvent, httpReq:HttpRequest, req:Request) => {
-      upstream ! ((e, httpReq), req)
-    }
-
-    case ((e:MessageEvent, httpReq:HttpRequest), resp:Response) => {
-      val hr = new DefaultHttpResponse(HttpVersion.HTTP_1_1, resp.status)
-      resp.headers.values.foreach((e) => hr.setHeader(e._1, e._2))
-      resp.value match {
-        case JNothing => hr.setHeader(HttpHeaders.Names.CONTENT_LENGTH, 0)
-        case v:JValue => {
-          val content = ChannelBuffers.copiedBuffer(compact(render(v)), HttpServer.utf8)
-          hr.setHeader(HttpHeaders.Names.CONTENT_LENGTH, content.readableBytes)
-          hr.setContent(content)
+    case (e:MessageEvent, httpReq:HttpRequest, req:Request) => {
+      import context.dispatcher
+      service ? req map {
+        x => x match {
+          case resp:Response => {
+            val hr = new DefaultHttpResponse(HttpVersion.HTTP_1_1, resp.status)
+            resp.headers.values.foreach((e) => hr.setHeader(e._1, e._2))
+            resp.value match {
+              case JNothing => hr.setHeader(HttpHeaders.Names.CONTENT_LENGTH, 0)
+              case v:JValue => {
+                val content = ChannelBuffers.copiedBuffer(compact(render(v)), HttpServer.utf8)
+                hr.setHeader(HttpHeaders.Names.CONTENT_LENGTH, content.readableBytes)
+                hr.setContent(content)
+              }
+            }
+            val future = e.getChannel.write(hr)
+            if (HttpHeaders.isKeepAlive(httpReq))
+              future.addListener(ChannelFutureListener.CLOSE)
+          }
         }
       }
-      val future = e.getChannel.write(hr)
-      if (HttpHeaders.isKeepAlive(httpReq))
-        future.addListener(ChannelFutureListener.CLOSE)
-    }
-
-    case e:ExceptionEvent => {
-      val logger = Logging(context.system, classOf[HttpActor])
-      logger.error(e.getCause, "exception in HttpServer")
-      val hr = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.INTERNAL_SERVER_ERROR)
-      val s = new StringWriter()
-      e.getCause.printStackTrace(new PrintWriter(s))
-      val content = ChannelBuffers.copiedBuffer(s.toString, HttpServer.utf8)
-      hr.setHeader(HttpHeaders.Names.CONTENT_LENGTH, content.readableBytes)
-      hr.setContent(content)
-      val future = e.getChannel.write(hr)
-      future.addListener(ChannelFutureListener.CLOSE)
     }
   }
 }
 
-class HttpServer(val upstream:ActorRef, system:ActorSystem) extends SimpleChannelUpstreamHandler
+class HttpServer(val service:ActorRef, system:ActorSystem) extends SimpleChannelUpstreamHandler
 {
-  val httpActor = system.actorOf(Props[HttpActor])
   val logger = Logging(system, classOf[HttpServer])
 
   def parseQuery(query:String):JObject = {
@@ -107,7 +98,8 @@ class HttpServer(val upstream:ActorRef, system:ActorSystem) extends SimpleChanne
           }
           val uri = new URI(req.getUri)
           val r:Request = Request(req.getMethod, uri.getPath, value, getHeaders(req.getHeaders), parseQuery(uri.getQuery))
-          httpActor ! (upstream, e, req, r)
+          val httpActor = system.actorOf(Props(new HttpActor(service)))
+          httpActor ! (e, req, r)
         }
       }
       case chunk:HttpChunk => {
@@ -121,7 +113,8 @@ class HttpServer(val upstream:ActorRef, system:ActorSystem) extends SimpleChanne
             case s:Some[ChannelBuffer] => JsonParser.parse(new InputStreamReader(new ChannelBufferInputStream(s.get), HttpServer.utf8))
           }
           val req = Request(partial.method, partial.name, value, (partial.headers ++ getHeaders(tail.getHeaders)).asInstanceOf[JObject], partial.params)
-          httpActor ! (upstream, e, httpRequest, req)
+          val httpActor = system.actorOf(Props(new HttpActor(service)))
+          httpActor ! (e, httpRequest, req)
         }
         else
         {
@@ -136,6 +129,14 @@ class HttpServer(val upstream:ActorRef, system:ActorSystem) extends SimpleChanne
   }
 
   override def exceptionCaught(ctx:ChannelHandlerContext, e:ExceptionEvent) = {
-    httpActor ! e
+    logger.error(e.getCause, "exception in HttpServer")
+    val hr = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.INTERNAL_SERVER_ERROR)
+    val s = new StringWriter()
+    e.getCause.printStackTrace(new PrintWriter(s))
+    val content = ChannelBuffers.copiedBuffer(s.toString, HttpServer.utf8)
+    hr.setHeader(HttpHeaders.Names.CONTENT_LENGTH, content.readableBytes)
+    hr.setContent(content)
+    val future = e.getChannel.write(hr)
+    future.addListener(ChannelFutureListener.CLOSE)
   }
 }
