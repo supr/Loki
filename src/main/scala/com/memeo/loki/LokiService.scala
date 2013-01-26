@@ -5,19 +5,23 @@ import org.jboss.netty.handler.codec.http.HttpResponseStatus._
 import net.liftweb.json.JsonAST._
 import net.liftweb.json.JsonDSL._
 import net.liftweb.json.{DefaultFormats, compact, JsonParser}
-import org.mapdb.DBMaker
+import org.mapdb.{DB, DBMaker}
 import akka.actor.{Props, Actor}
 import akka.pattern.{ask, pipe}
 import java.io.{IOError, FilenameFilter, File}
 import net.liftweb.json.JsonAST.JObject
 import net.liftweb.json.JsonAST.JString
 import net.liftweb.json.JsonAST.JArray
-import akka.zeromq.{Frame, ZMQMessage, Connect, ZeroMQExtension}
 import concurrent.{Future, future}
 import concurrent.duration._
 import org.jboss.netty.handler.codec.http.HttpResponseStatus
 import akka.util.Timeout
 import akka.event.Logging
+import collection.mutable
+import java.math.BigInteger
+import java.net.URLDecoder
+import collection.convert.WrapAsScala
+import collection.mutable.ListBuffer
 
 /**
  * Created with IntelliJ IDEA.
@@ -31,26 +35,16 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
   val logger = Logging(context.system, classOf[LokiService])
   def listDbs():List[String] = dbDir.list(new FilenameFilter {
     def accept(dir: File, name: String): Boolean = name.endsWith(".ldb")
-  }).map(name => name.substring(0, name.length - 4)).toList
-
-  def zReq(req:Request):ZMQMessage = {
-    ZMQMessage(List(Frame(compact(render(JArray(List(JString(req.method.getName), JString(req.name), req.params, req.headers, req.value)))))))
-  }
-
-  def zRes(rez:ZMQMessage):Response = {
-    JsonParser.parse(rez.firstFrameAsString) match {
-      case JArray(List(code:JInt, headers:JObject, value:JValue)) =>
-        Response(HttpResponseStatus.valueOf(code.values.intValue), value, headers)
-    }
-  }
+  }).map(name => name.substring(0, name.length - 4).replace(":", "/")).toList
 
   import context.dispatcher
   implicit val timeout = Timeout(30 seconds)
+  implicit val dbdir = dbDir
 
   def receive = {
     case request:Request => {
       try {
-        request.name.split('/').toList.filter(p => p.length > 0) match {
+        request.name.split('/').toList.filter(p => p.length > 0).map(e => URLDecoder.decode(e, "UTF-8")) match {
 
           // Root, server info.
           case List() => request.method match {
@@ -87,8 +81,7 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                         request.params ~ ("recurse" -> JBool(false)))
                       logger.info("next params {}", nextReq.params)
                       implicit val formats = DefaultFormats
-                      implicit val system = context.system
-                      context.system.actorOf(Props(new RemoteLoki(p))) ? nextReq map {
+                      context.system.actorFor(p.ipcAddr) ? nextReq map {
                         x => x match {
                           case r:Response => r.value match {
                             case a:JArray => a.extract[List[String]]
@@ -115,25 +108,23 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
               config.peers.get(Lookup.hash(name, config.n, config.i)) match {
                 case s:Some[Member] => s.get match {
                   case s:Self => {
-                    val dbFile = new File(dbDir, name + ".ldb")
-                    if (!dbFile.exists()) {
-                      sender ! Response(NOT_FOUND, ("result" -> JString("error")) ~ ("reason" -> JString("no_db_file")) ~ Nil, JObject(List()))
-                    } else {
-                      val container = DBMaker.newRandomAccessFileDB(dbFile).readOnly().make()
-                      try
-                      {
-                        val db = container.getTreeMap[String, Value]("_main", true)
-                        sender ! Response(OK, ("db_name" -> JString(name)) ~ ("disk_size" -> JInt(dbFile.length())) ~ ("doc_count" -> JInt(db.size())) ~ Nil, JObject(List()))
-                      }
-                      finally
-                      {
-                        container.close()
+                    Databases().snapshot(name) match {
+                      case None =>
+                        sender ! Response(NOT_FOUND, ("result" -> JString("error")) ~ ("reason" -> JString("no_db_file")) ~ Nil, JObject(List()))
+                      case d:Some[DB] => {
+                        val container = d.get
+                        val db = container.getTreeMap[String, Value]("_main")
+                        logger.info("db={} version={}", db, db.get("_version"))
+                        sender ! Response(OK, ("db_name" -> JString(name))
+                                              ~ ("disk_size" -> JInt(new File(dbDir, name.replace("/", ":")).length()))
+                                              ~ ("doc_count" -> JInt(db.headMap("_").size()))
+                                              ~ ("peer" -> JInt(s.id))
+                                              ~ Nil, JObject(List()))
                       }
                     }
                   }
                   case p:Peer => {
-                    implicit val system = context.system
-                    context.system.actorOf(Props(new RemoteLoki(p))) ? request pipeTo sender
+                    context.system.actorFor(p.ipcAddr) ? request pipeTo sender
                   }
                 }
               }
@@ -142,42 +133,98 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
               config.peers.get(Lookup.hash(name, config.n, config.i)) match {
                 case s:Some[Member] => s.get match {
                   case s:Self => {
-                    val dbFile = new File(dbDir, name + ".ldb")
-                    val container = DBMaker.newRandomAccessFileDB(dbFile).make()
-                    try
+                    if (!name.matches("[a-z][-a-z0-9_\\$()+/]*"))
                     {
-                      val m = container.createTreeMap[String, Value]("_main", 8, true, null, null, new StringComparator)
-                      //m.put("_version", "1")
-                      container.commit()
-                      sender ! Response(OK, ("result" -> JString("OK")) ~ ("created" -> JBool(true)) ~ Nil, JObject(List()))
+                      sender ! Response(BAD_REQUEST, ("result" -> JString("error")) ~ ("reason" -> JString("invalid_db_name")) ~ Nil)
                     }
-                    catch
+                    else
                     {
-                      case iae:IllegalArgumentException => {
-                        sender ! Response(PRECONDITION_FAILED,
-                          ("result" -> JString("error")) ~ ("reason" -> JString("the database already exists")) ~ Nil,
-                          JObject(List()))
+                      Databases().get(name, true) match {
+                        case None =>
+                          sender ! Response(PRECONDITION_FAILED,
+                            ("result" -> JString("error")) ~ ("reason" -> JString("db_exists")) ~ Nil,
+                            JObject(List()))
+                        case d:Some[DB] => {
+                          val container = d.get
+                          try
+                          {
+                            val m = container.createTreeMap[String, Value]("_main", 8, true, null, null, new StringComparator)
+                            val version = new java.util.LinkedHashMap[String, Object]()
+                            version.put("v", 1:Integer)
+                            m.put("_version", new Value("_version", BigInteger.valueOf(0), false, version))
+                            container.commit()
+                            sender ! Response(OK, ("result" -> JString("OK")) ~ ("created" -> JBool(true)) ~ ("peer" -> JInt(s.id)) ~ Nil, JObject(List()))
+                          }
+                          catch
+                          {
+                            case iae:IllegalArgumentException => {
+                              sender ! Response(PRECONDITION_FAILED,
+                                ("result" -> JString("error")) ~ ("reason" -> JString("db_exists")) ~ Nil,
+                                JObject(List()))
+                            }
+                          }
+                        }
                       }
-                    }
-                    finally
-                    {
-                      container.close()
                     }
                   }
                   case p:Peer => {
-                    implicit val system = context.system
-                    system.actorOf(Props(new RemoteLoki(p))) ? request pipeTo sender
+                    context.system.actorFor(p.ipcAddr) ? request pipeTo sender
                   }
                 }
               }
             }
             case DELETE => {
-              dbDir.listFiles(new FilenameFilter {
-                def accept(dir: File, fname: String): Boolean = fname.startsWith(name + ".ldb")
-              }).foreach(f => f.delete())
-              sender ! Response(OK, ("result" -> JString("ok")) ~ Nil, JObject(List()))
+              config.peers.get(Lookup.hash(name, config.n, config.i)) match {
+                case s:Self => {
+                  Databases().delete(name)
+                  sender ! Response(OK, ("result" -> JString("ok")) ~ ("peer" -> JInt(s.id)) ~ Nil, JObject(List()))
+                }
+                case p:Peer => {
+                  context.system.actorFor(p.ipcAddr) ? request pipeTo sender
+                }
+              }
             }
             case _ => sender ! Response(METHOD_NOT_ALLOWED, JNothing, JObject(List()))
+          }
+
+          case List(dbname:String, "_all_docs") => request.method match {
+            case GET => config.peers(Lookup.hash(dbname, config.n, config.i)) match {
+              case s:Self => {
+                Databases().snapshot(dbname) match {
+                  case None =>
+                    sender ! Response(NOT_FOUND, ("result" -> JString("error")) ~ ("reason" -> JString("no_db_file")) ~ Nil, JObject(List()))
+                  case d:Some[DB] =>
+                    val container = d.get
+                    val db:Map[String, Value] = WrapAsScala.mapAsScalaMap(container.getTreeMap[String, Value]("_main").headMap(request.params \ "startkey" match {
+                      case s:JString => s.values
+                      case _ => "_"
+                    }).tailMap(request.params \ "endkey" match {
+                      case s:JString => s.values
+                      case _ => ""
+                    })).toMap
+
+                    val results:List[JObject] = db.filter(e => !e._2.deleted).slice(0, request.params \ "limit" match {
+                      case s:JString => Math.min(db.size, Integer.parseInt(s.values))
+                      case i:JInt => Math.min(db.size, i.values.intValue())
+                      case _ => db.size
+                    }).foldLeft(new ListBuffer[JObject]())((b:ListBuffer[JObject], e) => {
+                      b += {
+                        request.params \ "include_docs" match {
+                          case JString("true")|JBool(true) =>
+                            ("id" -> JString(e._1)) ~ ("rev" -> JString(e._2.genRev)) ~ ("doc" -> e._2.toObject()) ~ Nil
+                          case _ =>
+                            ("id" -> JString(e._1)) ~ ("rev" -> JString(e._2.genRev)) ~ Nil
+                        }
+                      }
+                    }).toList
+                    sender ! Response(OK, ("results" -> JArray(results)))
+                  }
+                }
+              case p:Peer => {
+                context.system.actorFor(p.ipcAddr) ? request pipeTo sender
+              }
+            }
+            case _ => sender ! Response(METHOD_NOT_ALLOWED, JNothing)
           }
 
           case List(dbname:String, "_design", dname:String) => {
@@ -189,18 +236,13 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
             case GET => {
               config.peers(Lookup.hash(dbname, config.n, config.i)) match {
                 case s:Self => {
-                  val dbfile = new File(dbDir, dbname + ".ldb")
-                  if (!dbfile.exists())
-                  {
-                    sender ! Response(NOT_FOUND,
-                                      ("result" -> JString("error")) ~ ("reason" -> JString("no_db_file")) ~ Nil,
-                                      JObject(List()))
-                  }
-                  else
-                  {
-                    val container = DBMaker.newRandomAccessFileDB(dbfile).readOnly().make()
-                    try
-                    {
+                  Databases().snapshot(dbname) match {
+                    case None =>
+                      sender ! Response(NOT_FOUND,
+                                        ("result" -> JString("error")) ~ ("reason" -> JString("no_db_file")) ~ Nil,
+                                        JObject(List()))
+                    case d:Some[DB] => {
+                      val container = d.get
                       val db = container.getTreeMap[String, Value]("_main")
                       db.get(docname) match {
                         case null =>
@@ -208,30 +250,57 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                                             ("result" -> JString("error")) ~ ("reason" -> JString("not_found")) ~ Nil,
                                             JObject(List()))
                         case v:Value => {
-                          sender ! Response(OK, v.toObject, JObject(List()))
+                          sender ! Response(OK, v.toObject, ("Loki-Peer-Id" -> JString(s.id.toString)) ~ Nil)
                         }
                       }
-                    }
-                    finally
-                    {
-                      container.close()
                     }
                   }
                 }
                 case p:Peer => {
-                  implicit val system = context.system
-                  system.actorOf(Props(new RemoteLoki(p))) ? request pipeTo sender
+                  context.system.actorFor(p.ipcAddr) ? request pipeTo sender
                 }
               }
             }
             case PUT => {
               config.peers(Lookup.hash(dbname, config.n, config.i)) match {
                 case s:Self => {
-
+                  Databases().get(dbname, false) match {
+                    case None =>
+                      sender ! Response(NOT_FOUND,
+                        ("result" -> JString("error")) ~ ("reason" -> JString("no_db_file")) ~ Nil,
+                        JObject(List()))
+                    case d:Some[DB] => {
+                      val container = d.get
+                      val db = container.getTreeMap[String, Value]("_main")
+                      val old = Option(db.get(docname))
+                      val value = Value(docname, old match {
+                        case v:Some[Value] => v.get.seq.add(BigInteger.ONE)
+                        case None => BigInteger.ONE
+                      }, request.value)
+                      val rev = request.value \ "_rev" match {
+                        case s:JString => s.values
+                        case _ => ""
+                      }
+                      if (old.isDefined && old.get.genRev() != rev) {
+                        sender ! Response(CONFLICT, ("result" -> JString("error")) ~ ("reason" -> JString("documnent update conflict")) ~ Nil)
+                      } else {
+                        val replaced = Option(db.put(docname, value))
+                        if (replaced.isDefined && replaced.get.genRev() != rev)
+                        {
+                          container.rollback()
+                          sender ! Response(CONFLICT, ("result" -> JString("error")) ~ ("reason" -> JString("documnent update conflict")) ~ Nil)
+                        }
+                        else
+                        {
+                          container.commit()
+                          sender ! Response(if (old.isDefined) OK else CREATED, ("result" -> JString("ok")) ~ ("rev" -> JString(value.genRev())) ~ ("peer" -> JInt(s.id)) ~ Nil)
+                        }
+                      }
+                    }
+                  }
                 }
                 case p:Peer => {
-                  implicit val system = context.system
-                  system.actorOf(Props(new RemoteLoki(p))) ? request pipeTo sender
+                  context.system.actorFor(p.ipcAddr) ? request pipeTo sender
                 }
               }
             }

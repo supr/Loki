@@ -1,7 +1,6 @@
 package com.memeo.loki
 
 import java.net.InetSocketAddress
-import akka.zeromq._
 import akka.actor.{Props, ActorSystem}
 import org.jboss.netty.bootstrap.ServerBootstrap
 import org.jboss.netty.channel.socket.nio.NioServerSocketChannelFactory
@@ -26,7 +25,7 @@ object Main extends App
     if (i == me)
       m ++ Map(me -> Self(me, "loki" + me))
     else
-      m ++ Map(i -> Peer("tcp://127.0.0.1:" + (7777 + i), i, "loki" + i))
+      m ++ Map(i -> Peer("akka://loki@127.0.0.1:" + (7777 + i) + "/user/loki", i, "loki" + i))
   })
 
   class conf extends ClusterConfig
@@ -35,15 +34,13 @@ object Main extends App
     override val n = n_
     override val peers = peers_
   }
-  val system = ActorSystem("loki", ConfigFactory.parseFile(new File("akka.conf")))
+  val system = ActorSystem("loki", ConfigFactory.parseString("akka.remote.netty.port=" + (7777 + me)).withFallback(ConfigFactory.parseFile(new File("akka.conf")).withFallback(ConfigFactory.defaultOverrides())));
   val logger = Logging(system, getClass())
-  val service = system.actorOf(Props(new LokiService(new File("loki" + me), new conf())), name = "loki" + me)
+  val service = system.actorOf(Props(new LokiService(new File("loki" + me), new conf())), name = "loki")
   val bootstrap = new ServerBootstrap(new NioServerSocketChannelFactory(Executors.newCachedThreadPool(), Executors.newCachedThreadPool()))
   bootstrap.setPipelineFactory(new HttpServerPipelineFactory(service, system))
   val bindAddress = new InetSocketAddress(8080 + me)
   bootstrap.bind(bindAddress)
-  val zBind = "tcp://127.0.0.1:" + (7777 + me)
-  val reqSocket = ZeroMQExtension(system).newRepSocket(Array(Bind(zBind), Listener(system.actorOf(Props(new LokiIPCActor(service)), name="zmq-ipc" + me))))
   logger.info("Loki has started me={} i={} n={}", me, i_, n_)
-  logger.info("http={} zmq={}", bindAddress, zBind)
+  logger.info("http={}", bindAddress)
 }

@@ -12,6 +12,7 @@ import net.liftweb.json.JsonAST.JString
 import net.liftweb.json.JsonAST.JInt
 import net.liftweb.json.JsonAST.JArray
 import java.io.{DataOutput, DataInput}
+import java.util
 
 /**
  * Created with IntelliJ IDEA.
@@ -22,33 +23,27 @@ import java.io.{DataOutput, DataInput}
  */
 object JValueConversion
 {
-  def unpack(value:JValue):Any = {
+  def unpack(value:JValue):Object = {
     value match {
       case JNothing => null
       case JNull => null
-      case b:JBool => unpack(b)
-      case i:JInt => unpack(i)
+      case b:JBool => java.lang.Boolean.valueOf(b.value)
+      case i:JInt => i.values.underlying()
       case f:JDouble => java.lang.Double.valueOf(f.values)
       case s:JString => s.values
-      case a:JArray => unpack(a)
+      case a:JArray => {
+        a.children.foldLeft(new util.ArrayList[Object]())((a, e) => {
+          a.add(unpack(e))
+          a
+        })
+      }
       case o:JObject => {
-        val m = new java.util.LinkedHashMap[String, Any]()
-        m.putAll(WrapAsJava.mapAsJavaMap(o.values.map((e) => (e._1 -> unpack(e._2.asInstanceOf[JValue])))))
-        m
+        o.obj.foldLeft(new util.LinkedHashMap[String, Object]())((m, e) => {
+          m.put(e.name, unpack(e.value))
+          m
+        })
       }
     }
-  }
-
-  def unpack(b:JBool):java.lang.Boolean = {
-    java.lang.Boolean.valueOf(b.value)
-  }
-
-  def unpack(i:JInt):BigInteger = {
-    i.values.underlying()
-  }
-
-  def unpack(a:JArray):java.util.List[Any] = {
-    new java.util.ArrayList(WrapAsJava.seqAsJavaList(a.children.map(unpack)))
   }
 
   def pack(value:Any):JValue = {

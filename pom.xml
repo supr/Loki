@@ -16,7 +16,7 @@
     </dependency>
     <dependency>
       <groupId>com.typesafe.akka</groupId>
-      <artifactId>akka-zeromq_2.10</artifactId>
+      <artifactId>akka-remote_2.10</artifactId>
       <version>2.1.0</version>
     </dependency>
     <dependency>
@@ -62,6 +62,16 @@
           <sources>
             <source>src/main/java</source>
           </sources>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-assembly-plugin</artifactId>
+        <version>2.4</version>
+        <configuration>
+          <descriptorRefs>
+            <descriptorRef>jar-with-dependencies</descriptorRef>
+          </descriptorRefs>
         </configuration>
       </plugin>
     </plugins>

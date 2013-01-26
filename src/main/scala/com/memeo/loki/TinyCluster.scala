@@ -7,7 +7,6 @@ import org.jboss.netty.channel.socket.nio.NioServerSocketChannelFactory
 import java.util.concurrent.Executors
 import java.net.InetSocketAddress
 import scala.Array
-import akka.zeromq.{Listener, Bind, ZeroMQExtension}
 
 /**
  * Copyright (C) 2013 Memeo, Inc.
@@ -15,7 +14,7 @@ import akka.zeromq.{Listener, Bind, ZeroMQExtension}
  */
 object TinyCluster
 {
-  val config1 = new ClusterConfig {
+  /*val config1 = new ClusterConfig {
     val n: Int = 3
     val i: Int = 2
     val peers: Map[Int, Member] = Map(0 -> Self(0, "loki1"),
@@ -55,5 +54,5 @@ object TinyCluster
   val bootstrap3 = new ServerBootstrap(new NioServerSocketChannelFactory(Executors.newCachedThreadPool(), Executors.newCachedThreadPool()))
   bootstrap3.setPipelineFactory(new HttpServerPipelineFactory(service3, system3))
   bootstrap3.bind(new InetSocketAddress(8082))
-  val reqSocket3 = ZeroMQExtension(system3).newRepSocket(Array(Bind("tcp://127.0.0.1:7779"), Listener(system3.actorOf(Props(new LokiIPCActor(service3)), name="zmq-ipc3"))))
+  val reqSocket3 = ZeroMQExtension(system3).newRepSocket(Array(Bind("tcp://127.0.0.1:7779"), Listener(system3.actorOf(Props(new LokiIPCActor(service3)), name="zmq-ipc3"))))*/
 }

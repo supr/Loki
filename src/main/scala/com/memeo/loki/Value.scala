@@ -23,12 +23,7 @@ object Value
       case _ => throw new IllegalArgumentException("invalid object")
     }
   }
-}
 
-class Value(val id:String, val seq:BigInteger,
-            val deleted:Boolean,
-            val value:java.util.LinkedHashMap[String, Object]) extends Serializable
-{
   val utf8 = Charset.forName("UTF-8")
   val OBJECT = 0.toByte
   val LIST = 1.toByte
@@ -40,6 +35,13 @@ class Value(val id:String, val seq:BigInteger,
   val STRING = 7.toByte
   val ROOT = 0xfe.toByte
   val END = 0xff.toByte
+}
+
+class Value(val id:String, val seq:BigInteger,
+            val deleted:Boolean,
+            val value:java.util.LinkedHashMap[String, Object]) extends Serializable
+{
+  import Value._
 
   private def hash(md:MessageDigest, o:Any):Unit = {
     o match {
@@ -117,9 +119,13 @@ class Value(val id:String, val seq:BigInteger,
       o
   }
 
-  def genRev():String = {
+  def revHash():String = {
     val md = MessageDigest.getInstance("SHA-1")
     hashRoot(md, value)
-    "%d-%s".format(seq, md.digest().foldLeft(new StringBuilder)((b, e) => b.append("%02x".format(e & 0xFF))))
+    md.digest().foldLeft(new StringBuilder)((b, e) => b.append("%02x".format(e & 0xFF))).toString
+  }
+
+  def genRev():String = {
+    "%d-%s".format(seq, revHash())
   }
 }
