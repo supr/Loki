@@ -62,6 +62,14 @@ class Value(val id:String, val seq:BigInteger,
         md.update(INTEGER)
         md.update(i.toByteArray)
       }
+      case l:Long => {
+        md.update(INTEGER)
+        md.update(BigInteger.valueOf(l).toByteArray)
+      }
+      case i:Integer => {
+        md.update(INTEGER)
+        md.update(BigInteger.valueOf(i.longValue()).toByteArray)
+      }
       case d:Double => {
         md.update(DOUBLE)
         md.update("%g".format(d).getBytes(utf8))

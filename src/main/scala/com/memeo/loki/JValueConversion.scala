@@ -52,6 +52,8 @@ object JValueConversion
       case b:Boolean => JBool(b)
       case f:Double => JDouble(f)
       case i:BigInteger => JInt(BigInt(i))
+      case l:Long => JInt(BigInt(l))
+      case i:Integer => JInt(BigInt(i))
       case s:String => JString(s)
       case l:java.util.List[Any] => JArray(WrapAsScala.iterableAsScalaIterable(l).map(pack).toList)
       case m:java.util.Map[String, Any] => JObject(WrapAsScala.iterableAsScalaIterable(m.entrySet).map((e:java.util.Map.Entry[String, Any]) => JField(e.getKey, pack(e.getValue))).toList)

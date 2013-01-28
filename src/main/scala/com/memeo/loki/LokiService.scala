@@ -8,7 +8,7 @@ import net.liftweb.json.{DefaultFormats, compact, JsonParser}
 import org.mapdb.{DB, DBMaker}
 import akka.actor.{Props, Actor}
 import akka.pattern.{ask, pipe}
-import java.io.{IOError, FilenameFilter, File}
+import java.io.{IOException, IOError, FilenameFilter, File}
 import net.liftweb.json.JsonAST.JObject
 import net.liftweb.json.JsonAST.JString
 import net.liftweb.json.JsonAST.JArray
@@ -195,28 +195,27 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                     sender ! Response(NOT_FOUND, ("result" -> JString("error")) ~ ("reason" -> JString("no_db_file")) ~ Nil, JObject(List()))
                   case d:Some[DB] =>
                     val container = d.get
-                    val db:Map[String, Value] = WrapAsScala.mapAsScalaMap(container.getTreeMap[String, Value]("_main").headMap(request.params \ "startkey" match {
-                      case s:JString => s.values
-                      case _ => "_"
-                    }).tailMap(request.params \ "endkey" match {
-                      case s:JString => s.values
-                      case _ => ""
-                    })).toMap
+                    val db:java.util.Map[String, Value] =
+                      Util.filteredMap(
+                        Util.boundedMap(container.getTreeMap[String, Value]("_main").subMap(null, true, "_", false), request.params \ "limit" match {
+                          case s:JString => Integer.parseInt(s.values)
+                          case i:JInt => i.values.toInt
+                          case JNothing => Integer.MAX_VALUE
+                          case x => throw new IOException("invalid 'limit' parameter " + x)
+                        }), (k:String, v:Value) => !v.deleted)
 
-                    val results:List[JObject] = db.filter(e => !e._2.deleted).slice(0, request.params \ "limit" match {
-                      case s:JString => Math.min(db.size, Integer.parseInt(s.values))
-                      case i:JInt => Math.min(db.size, i.values.intValue())
-                      case _ => db.size
-                    }).foldLeft(new ListBuffer[JObject]())((b:ListBuffer[JObject], e) => {
-                      b += {
-                        request.params \ "include_docs" match {
-                          case JString("true")|JBool(true) =>
-                            ("id" -> JString(e._1)) ~ ("rev" -> JString(e._2.genRev)) ~ ("doc" -> e._2.toObject()) ~ Nil
-                          case _ =>
-                            ("id" -> JString(e._1)) ~ ("rev" -> JString(e._2.genRev)) ~ Nil
-                        }
+                    val buf:ListBuffer[JObject] = new ListBuffer[JObject]()
+                    val it = db.values().iterator()
+                    while (it.hasNext()) {
+                      val v:Value = it.next()
+                      val x = ("id" -> JString(v.id)) ~ ("rev" -> JString(v.genRev())) ~ Nil
+                      request.params \ "include_docs" match {
+                        case JBool(true)|JString("true") =>
+                          buf += x ~ v.toObject() ~ Nil
+                        case _ => buf += x
                       }
-                    }).toList
+                    }
+                    val results:List[JObject] = buf.toList
                     sender ! Response(OK, ("results" -> JArray(results)))
                   }
                 }
