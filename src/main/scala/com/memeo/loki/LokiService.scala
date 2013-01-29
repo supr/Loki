@@ -154,6 +154,7 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                             m.put("_version", new Value("_version", BigInteger.valueOf(0), false, version))
                             container.commit()
                             sender ! Response(OK, ("result" -> JString("OK")) ~ ("created" -> JBool(true)) ~ ("peer" -> JInt(s.id)) ~ Nil, JObject(List()))
+                            logger.info("created {}", name)
                           }
                           catch
                           {
@@ -168,6 +169,7 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                     }
                   }
                   case p:Peer => {
+                    logger.info("forwarding PUT {} to {}", name, p.ipcAddr)
                     context.system.actorFor(p.ipcAddr) ? request pipeTo sender
                   }
                 }
@@ -197,7 +199,13 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                     val container = d.get
                     val db:java.util.Map[String, Value] =
                       Util.filteredMap(
-                        Util.boundedMap(container.getTreeMap[String, Value]("_main").subMap(null, true, "_", false), request.params \ "limit" match {
+                        Util.boundedMap(container.getTreeMap[String, Value]("_main").subMap(request.params \ "startkey" match {
+                          case s:JString => s.values
+                          case _ => ""
+                        }, true, request.params \ "endkey" match {
+                          case s:JString => s.values
+                          case _ => "_"
+                        }, false), request.params \ "limit" match {
                           case s:JString => Integer.parseInt(s.values)
                           case i:JInt => i.values.toInt
                           case JNothing => Integer.MAX_VALUE
@@ -299,6 +307,7 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                   }
                 }
                 case p:Peer => {
+                  logger.info("forwarding PUT {}/{} to {}", dbname, docname, p.ipcAddr)
                   context.system.actorFor(p.ipcAddr) ? request pipeTo sender
                 }
               }
