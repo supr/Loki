@@ -21,6 +21,8 @@ import net.liftweb.json.JsonAST._
 import collection.convert.{WrapAsScala, WrapAsJava}
 import java.math.BigInteger
 import scala._
+import collection.mutable
+import collection.mutable.ArrayBuffer
 import net.liftweb.json.JsonAST.JDouble
 import net.liftweb.json.JsonAST.JBool
 import net.liftweb.json.JsonAST.JObject
@@ -32,40 +34,60 @@ import java.util
 
 object JValueConversion
 {
-  def unpack(value:JValue):Object = {
-    value match {
-      case JNothing => null
-      case JNull => null
-      case b:JBool => java.lang.Boolean.valueOf(b.value)
-      case i:JInt => i.values.underlying()
-      case f:JDouble => java.lang.Double.valueOf(f.values)
-      case s:JString => s.values
+  def unpackKey(key:JValue):Key = {
+    key match {
+      case JNothing|JNull => NullKey
+      case JBool(false) => BoolKey(false)
+      case JBool(true) => BoolKey(true)
+      case i:JInt => new IntKey(i.values)
+      case f:JDouble => new DoubleKey(f.values)
+      case s:JString => new StringKey(s.values)
       case a:JArray => {
-        a.children.foldLeft(new util.ArrayList[Object]())((a, e) => {
-          a.add(unpack(e))
+        new ArrayKey(a.children.foldLeft(new ArrayBuffer[Key]())((a, e) => {
+          a += unpackKey(e)
           a
-        })
+        }).toArray)
       }
       case o:JObject => {
-        o.obj.foldLeft(new util.LinkedHashMap[String, Object]())((m, e) => {
-          m.put(e.name, unpack(e.value))
-          m
-        })
+        new ObjectKey(o.obj.foldLeft(new mutable.LinkedHashMap[String, Key]())((m, e) => {
+          m += (e.name -> unpackKey(e.value))
+        }).toMap)
       }
     }
   }
 
-  def pack(value:Any):JValue = {
+  def unpackValue(value:JValue):DocumentMember = {
     value match {
-      case null => JNull
-      case b:Boolean => JBool(b)
-      case f:Double => JDouble(f)
-      case i:BigInteger => JInt(BigInt(i))
-      case l:Long => JInt(BigInt(l))
-      case i:Integer => JInt(BigInt(i))
-      case s:String => JString(s)
-      case l:java.util.List[Any] => JArray(WrapAsScala.iterableAsScalaIterable(l).map(pack).toList)
-      case m:java.util.Map[String, Any] => JObject(WrapAsScala.iterableAsScalaIterable(m.entrySet).map((e:java.util.Map.Entry[String, Any]) => JField(e.getKey, pack(e.getValue))).toList)
+      case JNothing|JNull => NullMember
+      case b:JBool => new BoolMember(b.value)
+      case i:JInt => new IntMember(i.values)
+      case f:JDouble => new DoubleMember(f.values)
+      case s:JString => new StringMember(s.values)
+      case a:JArray => {
+        new ArrayMember(a.children.foldLeft(new ArrayBuffer[DocumentMember]())((a, e) => {
+          a += unpackValue(e)
+          a
+        }).toArray)
+      }
+      case o:JObject => {
+        new ObjectMember(o.obj.foldLeft(new mutable.LinkedHashMap[String, DocumentMember]())((m, e) => {
+          m += (e.name -> unpackValue(e.value))
+          m
+        }).toMap)
+      }
+    }
+  }
+
+  def pack(value:DocumentMember):JValue = {
+    value match {
+      case NullMember => JNull
+      case BoolMember(false) => JBool(false)
+      case BoolMember(true) => JBool(true)
+      case f:DoubleMember => JDouble(f.value)
+      case i:IntMember => JInt(i.value)
+      case s:StringMember => JString(s.value)
+      case l:Iterable[DocumentMember] => JArray(l.map(pack).toList)
+      case m:Map[String, DocumentMember] => JObject(m.map((e) => JField(e._1, pack(e._2))).toList)
     }
   }
 }
