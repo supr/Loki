@@ -78,16 +78,25 @@ object JValueConversion
     }
   }
 
-  def pack(value:DocumentMember):JValue = {
-    value match {
-      case NullMember => JNull
-      case BoolMember(false) => JBool(false)
-      case BoolMember(true) => JBool(true)
-      case f:DoubleMember => JDouble(f.value)
-      case i:IntMember => JInt(i.value)
-      case s:StringMember => JString(s.value)
-      case l:Iterable[DocumentMember] => JArray(l.map(pack).toList)
-      case m:Map[String, DocumentMember] => JObject(m.map((e) => JField(e._1, pack(e._2))).toList)
-    }
+  def pack(value:DocumentMember):JValue = value match {
+    case NullMember => JNull
+    case BoolMember(false) => JBool(false)
+    case BoolMember(true) => JBool(true)
+    case f:DoubleMember => JDouble(f.value)
+    case i:IntMember => JInt(i.value)
+    case s:StringMember => JString(s.value)
+    case l:ArrayMember => JArray(l.value.map(pack).toList)
+    case m:ObjectMember => JObject(m.value.map(e => JField(e._1, pack(e._2))).toList)
+  }
+
+  def packKey(key:Key):JValue = key match {
+    case NullKey => JNull
+    case BoolKey(false) => JBool(false)
+    case BoolKey(true) => JBool(true)
+    case f:DoubleKey => JDouble(f.value)
+    case i:IntKey => JInt(i.value)
+    case s:StringKey => JString(s.value)
+    case i:ArrayKey => JArray(i.value.map(packKey).toList)
+    case o:ObjectKey => JObject(o.value.map(e => JField(e._1, packKey(e._2))).toList)
   }
 }

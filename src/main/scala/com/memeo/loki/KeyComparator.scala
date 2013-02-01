@@ -21,9 +21,12 @@ import com.ibm.icu.text.{RuleBasedCollator, Collator}
 import java.math.BigInteger
 import java.math
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
+import akka.event.Logging
+import akka.actor.ActorSystem
 
 object KeyComparator
 {
+  val logger = Logging(ActorSystem("loki"), classOf[KeyComparator])
   val collator:Collator = new RuleBasedCollator("<\ufffe")
 }
 
@@ -32,80 +35,71 @@ object KeyComparator
  */
 class KeyComparator extends Comparator[Key] with Serializable
 {
-  import collection.convert.WrapAsScala.{mapAsScalaMap, iterableAsScalaIterable}
-  import KeyComparator.collator
+  import KeyComparator._
 
   def compare(k1: Key, k2: Key): Int = {
-    k1 match {
-      case NullKey => {
-        k2 match {
-          case NullKey => 0
-          case _ => -1
-        }
+    logger.info("compare {} vs {}", k1, k2)
+
+    val res:Int = k1 match {
+      case NullKey => k2 match {
+        case NullKey => 0
+        case _ => -1
       }
 
-      case BoolKey(false) => {
-        k2 match {
-          case NullKey => 1
-          case BoolKey(false) => 0
-          case _ => -1
-        }
+      case BoolKey(false) => k2 match {
+        case NullKey => 1
+        case BoolKey(false) => 0
+        case _ => -1
       }
 
-      case BoolKey(true) => {
-        k2 match {
-          case NullKey|BoolKey(false) => 1
-          case BoolKey(true) => 0
-          case _ => -1
-        }
+      case BoolKey(true) => k2 match {
+        case NullKey|BoolKey(false) => 1
+        case BoolKey(true) => 0
+        case _ => -1
       }
 
-      case i1:IntKey => {
-        k2 match {
-          case NullKey|BoolKey(_) => 1
-          case i2:IntKey => i1.value.compare(i2.value)
-          case d:Double => i1.value.compare(BigInt(d.value.toInt))
-          case _ => -1
-        }
+      case i1:IntKey => k2 match {
+        case NullKey|BoolKey(_) => 1
+        case i2:IntKey => i1.value.compare(i2.value)
+        case d:DoubleKey => i1.value.compare(BigInt(d.value.toInt))
+        case _ => -1
       }
 
-      case d1:DoubleKey => {
-        k2 match {
-          case NullKey|BoolKey(_) => 1
-          case i:IntKey => d1.value.compare(i.value.toDouble)
-          case d2:Double => d1.value.compare(d2.value)
-          case _ => -1
-        }
+      case d1:DoubleKey => k2 match {
+        case NullKey|BoolKey(_) => 1
+        case i:IntKey => d1.value.compare(i.value.toDouble)
+        case d2:DoubleKey => d1.value.compare(d2.value)
+        case _ => -1
       }
 
-      case s1:StringKey => {
+      case s1:StringKey => k2 match {
         case NullKey|BoolKey(_)|IntKey(_)|DoubleKey(_) => 1
         case s2:StringKey => KeyComparator.collator.compare(s1.value, s2.value)
         case _ => -1
       }
 
-      case a1:ArrayKey => {
+      case a1:ArrayKey => k2 match {
         case NullKey|BoolKey(_)|IntKey(_)|DoubleKey(_)|StringKey(_) => 1
         case a2:ArrayKey => {
-          a1.value.zipAll(a2, ObjectKey(Map()), ObjectKey(Map())).foldLeft(0)((res, e) => {
+          a1.value.zipAll(a2.value, ObjectKey(Map()), ObjectKey(Map())).foldLeft(0)((res, e) => {
             if (res == 0) compare(e._1, e._2) else res
           })
         }
         case _ => -1
       }
 
-      case o1:ObjectKey => {
-        k2 match {
-          case NullKey|BoolKey(_)|IntKey(_)|DoubleKey(_)|StringKey(_)|ArrayKey(_) => 1
-          case o2:ObjectKey => {
-            val res = o1.value.zip(o2.value).foldLeft(0)((res, e) => {
-              if (res == 0) collator.compare(e._1._1, e._2._1) else res
-            })
-            if (res == 0) o1.value.size.compare(o2.value.size) else res
-          }
-          case _ => -1 // Should not happen?
+      case o1:ObjectKey => k2 match {
+        case NullKey|BoolKey(_)|IntKey(_)|DoubleKey(_)|StringKey(_)|ArrayKey(_) => 1
+        case o2:ObjectKey => {
+          val res = o1.value.zip(o2.value).foldLeft(0)((res, e) => {
+            if (res == 0) collator.compare(e._1._1, e._2._1) else res
+          })
+          if (res == 0) o1.value.size.compare(o2.value.size) else res
         }
+        case _ => -1 // Should not happen?
       }
     }
+    logger.info("result: {}", res)
+    res
   }
 }

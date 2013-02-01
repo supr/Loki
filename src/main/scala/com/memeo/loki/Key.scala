@@ -19,8 +19,61 @@ package com.memeo.loki
 abstract class Key
 case object NullKey extends Key with Serializable
 case class BoolKey(val value:Boolean) extends Key with Serializable
+{
+  override def toString: String = "BoolKey(" + value.toString() + ")"
+
+  override def equals(obj: Any): Boolean = obj match {
+    case b:BoolKey => value == b.value
+    case _ => false
+  }
+}
+
 case class IntKey(val value:BigInt) extends Key with Serializable
+{
+  override def toString: String = "IntKey(" + value.toString() + ")"
+
+  override def equals(obj: Any): Boolean = obj match {
+    case i:IntKey => value.equals(i.value)
+    case _ => false
+  }
+}
+
 case class DoubleKey(val value:Double) extends Key with Serializable
+{
+  override def toString: String = "DoubleKey(" + value.toString() + ")"
+
+  override def equals(obj: Any): Boolean = obj match {
+    case d:DoubleKey => value == d.value
+    case _ => false
+  }
+}
+
 case class StringKey(val value:String) extends Key with Serializable
+{
+  override def toString: String = "StringKey(" + value + ")"
+
+  override def equals(obj: Any): Boolean = obj match {
+    case s:StringKey => value == s.value
+    case _ => false
+  }
+}
+
 case class ArrayKey(val value:Array[Key]) extends Key with Serializable
+{
+  override def toString: String = "ArrayKey(" + value.foldLeft(new StringBuilder("["))((s, e) => s.append(e.toString)).append("]").toString() + ")"
+
+  override def equals(obj: Any): Boolean = obj match {
+    case a:ArrayKey => value.size == a.value.size && value.zip(a.value).forall(e => e._1 == e._2)
+    case _ => false
+  }
+}
+
 case class ObjectKey(val value:Map[String, Key]) extends Key with Serializable
+{
+  override def toString: String = "ObjectKey(" + value.foldLeft(new StringBuilder("{"))((s, e) => s.append(e._1).append(" -> ").append(e._2.toString).append(", ")).append("}").toString() + ")"
+
+  override def equals(obj: Any): Boolean = obj match {
+    case o:ObjectKey => value.size == o.value.size && value.forall(e => o.value.contains(e._1) && o.value(e._1) == e._2)
+    case _ => false
+  }
+}

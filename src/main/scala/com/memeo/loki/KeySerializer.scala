@@ -19,19 +19,16 @@ package com.memeo.loki
 import org.mapdb.{BTreeKeySerializer, Serializer}
 import java.io._
 import java.nio.charset.Charset
-import com.memeo.loki.IntKey
-import com.memeo.loki.BoolKey
-import com.memeo.loki.StringKey
-import com.memeo.loki.DoubleKey
-import com.memeo.loki.ObjectKey
 import scala.Serializable
-import com.memeo.loki.ArrayKey
 import collection.mutable.ArrayBuffer
 import java.math.BigInteger
 import collection.mutable
+import akka.event.Logging
+import akka.actor.ActorSystem
 
 object KeySerializer
 {
+  val logger = Logging(ActorSystem("loki"), classOf[KeySerializer])
   val utf8 = Charset.forName("UTF-8")
 
   val TypeNull   = 'n'.toByte
@@ -49,11 +46,11 @@ object KeySerializer
   val TypeNullRef = '0'.toByte
 }
 
-class KeySerializer extends BTreeKeySerializer[Key]
+class KeySerializer extends BTreeKeySerializer[Key] with Serializable
 {
   import KeySerializer._
 
-  def serializeKey(out:DataOutput, key:Key):Unit = {
+  def serializeKey(out:DataOutput, key:Key):Unit = key match {
     case NullKey => out.write(TypeNull)
     case BoolKey(false) => out.write(TypeFalse)
     case BoolKey(true) => out.write(TypeTrue)
@@ -83,28 +80,19 @@ class KeySerializer extends BTreeKeySerializer[Key]
     }
     case a:ArrayKey => {
       out.write(TypeArray)
-      a.value.foreach(e => serialize(out, start, end, Array(e)))
+      a.value.foreach(e => serializeKey(out, e))
       out.write(TypeEnd)
     }
     case o:ObjectKey => {
       out.write(TypeObject)
-      o.value.foreach(e => {
-        out.write(TypeArray)
-        val key = e._1.getBytes(utf8)
-        out.write(TypeString)
-        out.writeInt(key.length)
-        out.write(key)
-        serializeKey(out, e._2)
-        out.write(TypeEnd)
-      })
+      o.value.foreach(e => serializeKey(out, new ArrayKey(Array(new StringKey(e._1), e._2))))
       out.write(TypeEnd)
     }
   }
 
   def serialize(out: DataOutput, start: Int, end: Int, keys: Array[AnyRef]):Unit = {
-    out.write(TypeKeys)
     keys.slice(start, end).foreach(k => k match {
-      case k:Key => serializeKey(k)
+      case k:Key => serializeKey(out, k)
       case s:Serializable => {
         val b = new ByteArrayOutputStream()
         val o = new ObjectOutputStream(b)
@@ -119,14 +107,13 @@ class KeySerializer extends BTreeKeySerializer[Key]
         out.write(TypeNullRef)
       }
     })
-    out.write(TypeEnd)
   }
 
-  def deserializeKey(in: DataInput): AnyRef = {
+  def deserializeKey(in: DataInput): Key = {
     deserializeKey(in, in.readByte())
   }
 
-  def deserializeArray(in: DataInput, buf:ArrayBuffer[AnyRef]):Unit = {
+  def deserializeArray(in: DataInput, buf:ArrayBuffer[Key]):Unit = {
     in.readByte() match {
       case TypeEnd => Unit
       case x => {
@@ -136,7 +123,7 @@ class KeySerializer extends BTreeKeySerializer[Key]
     }
   }
 
-  def deserializeObject(in: DataInput, map:mutable.LinkedHashMap[String, AnyRef]):Unit = {
+  def deserializeObject(in: DataInput, map:mutable.LinkedHashMap[String, Key]):Unit = {
     in.readByte() match {
       case TypeEnd => Unit
       case TypeArray => {
@@ -153,23 +140,15 @@ class KeySerializer extends BTreeKeySerializer[Key]
     }
   }
 
-  def deserializeKey(in: DataInput, t:Byte) = {
+  def deserializeKey(in: DataInput, t:Byte):Key = {
     t match {
       case TypeNull => NullKey
       case TypeFalse => BoolKey(false)
       case TypeTrue => BoolKey(true)
-      case TypeInt => {
-        val len = in.readInt()
-        val v = new Array[Byte](len)
-        in.readFloat(v)
-        IntKey(BigInt(new BigInteger(v)))
-      }
       case TypeDouble => {
         DoubleKey(in.readDouble())
       }
-      case TypeInt => {
-        IntKey(BigInt(in.readInt()))
-      }
+      case TypeInt => IntKey(BigInt(in.readInt()))
       case TypeBigInt => {
         val len = in.readInt()
         val v = new Array[Byte](len)
@@ -183,30 +162,43 @@ class KeySerializer extends BTreeKeySerializer[Key]
         StringKey(new String(v, utf8))
       }
       case TypeArray => {
-        val buf = new ArrayBuffer[AnyRef]()
+        val buf = new ArrayBuffer[Key]()
         deserializeArray(in, buf)
-        ArrayKey(buf.toArray[Key])
+        ArrayKey(buf.toArray)
       }
       case TypeObject => {
-        val map = new mutable.LinkedHashMap[String, AnyRef]()
+        val map = new mutable.LinkedHashMap[String, Key]()
         deserializeObject(in, map)
-        ObjectKey(map.toMap[String, Key])
-      }
-      case TypeSerializable => {
-        val len = in.readInt()
-        val v = new Array[Byte](len)
-        in.readFully(v)
-        val i = new ObjectInputStream(new ByteArrayInputStream(v))
-        i.readObject()
+        ObjectKey(map.toMap)
       }
     }
   }
 
   def deserialize(in: DataInput, start: Int, end: Int, size: Int): Array[AnyRef] = {
+    logger.info("deserialize {} {} {}", start, end, size)
     val buf = new ArrayBuffer[AnyRef](size)
-    Range(0, start, 1).foreach(_ => buf += null)
-    Range(start, end, 1).foreach(_ => buf += deserializeKey(in))
-    Range(end, size, 1).foreach(_ => buf += null)
+    Range(0, start, 1).foreach(i => {
+      logger.info("prepend null {}", i)
+      buf += null
+    })
+    Range(start, end, 1).foreach(i => {
+      logger.info("deserialize {}", i)
+      in.readByte() match {
+        case TypeSerializable => {
+          val len = in.readInt()
+          val v = new Array[Byte](len)
+          in.readFully(v)
+          val i = new ObjectInputStream(new ByteArrayInputStream(v))
+          buf += i.readObject()
+        }
+        case t => buf += deserializeKey(in, t)
+        case x => throw new IOException("invalid type code " + x)
+      }
+    })
+    Range(end, size, 1).foreach(i => {
+      logger.info("append null {}", i)
+      buf += null
+    })
     buf.toArray
   }
 }
