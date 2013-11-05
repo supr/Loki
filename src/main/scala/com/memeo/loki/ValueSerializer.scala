@@ -134,7 +134,6 @@ class ValueSerializer extends Serializer[Value] with Serializable
   }
 
   def deserializeMember(in:DataInput, t:Byte):DocumentMember = {
-    logger.info("deserializeMember t:{}", t)
     t match {
       case TypeNull => NullMember
       case TypeFalse => BoolMember(false)

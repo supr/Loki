@@ -220,7 +220,6 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
               sender ! Response(NOT_FOUND, ("result" -> JString("error")) ~ ("reason" -> JString("no_db_file")) ~ Nil, JObject(List()))
             case d:Some[DB] =>
               val container = d.get
-              val db = WrapAsScala.mapAsScalaMap(container.getTreeMap[Key, Value]("_main"))
               val startkey = request.params \ "startkey" match {
                 case JNull|JNothing => NullKey
                 case s:JString => StringKey(s.values)
@@ -231,6 +230,7 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                 case s:JString => StringKey(s.values)
                 case _ => throw new IllegalArgumentException("invalid endkey")
               }
+              val db = WrapAsScala.mapAsScalaMap(container.getTreeMap[Key, Value]("_main").subMap(startkey, endkey))
               val limit:Int = request.params \ "limit" match {
                 case JNull|JNothing => Integer.MAX_VALUE
                 case i:JInt => i.values.toInt
@@ -248,7 +248,7 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
               // TODO we should navigate to the first element, and iterate from there, but
               // MapDB is buggy with subMaps right now.
               val buf:ListBuffer[JValue] = new ListBuffer[JValue]()
-              db.takeWhile(e => comp.compare(e._1, startkey) >= 0 && comp.compare(e._1, endkey) < 0 && buf.size < limit)
+              db.takeWhile((e) => buf.size < limit)
                 .filter(e => !e._2.deleted)
                 .foreach(e => {
                   if (include_docs)

@@ -38,8 +38,6 @@ class KeyComparator extends Comparator[Key] with Serializable
   import KeyComparator._
 
   def compare(k1: Key, k2: Key): Int = {
-    logger.info("compare {} vs {}", k1, k2)
-
     val res:Int = k1 match {
       case NullKey => k2 match {
         case NullKey => 0
@@ -99,7 +97,6 @@ class KeyComparator extends Comparator[Key] with Serializable
         case _ => -1 // Should not happen?
       }
     }
-    logger.info("result: {}", res)
     res
   }
 }
