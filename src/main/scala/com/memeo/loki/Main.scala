@@ -18,6 +18,10 @@ import akka.event.Logging
  */
 object Main extends App
 {
+  if (args.length < 3) {
+    sys.error("usage: com.memeo.loki.Main <my-id> <i> <n>")
+    sys.exit(-1)
+  }
   val me = Integer.parseInt(args(0))
   val i_ = Integer.parseInt(args(1))
   val n_ = Integer.parseInt(args(2))

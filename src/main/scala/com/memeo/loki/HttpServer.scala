@@ -105,11 +105,15 @@ class HttpServer(val service:ActorRef, system:ActorSystem) extends SimpleChannel
           val partial:Request = Request(req.getMethod, uri.getPath, JNothing, getHeaders(req.getHeaders), parseQuery(uri.getQuery))
           ctx.setAttachment((partial, None))
         } else {
+          val length = HttpHeaders.getContentLength(req, -1)
+          if (length < 0) {
+            throw new IllegalArgumentException("Content-length required")
+          }
           val value = Option(req.getContent) match {
             case None => JNothing
             case buf:Some[ChannelBuffer] if (buf.get.readableBytes() == 0) => JNothing
             case buf:Some[ChannelBuffer] => {
-              JsonParser.parse(new InputStreamReader(new ChannelBufferInputStream(buf.get), HttpServer.utf8))
+              JsonParser.parse(new InputStreamReader(new ChannelBufferInputStream(buf.get, length.toInt), HttpServer.utf8))
             }
           }
           val uri = new URI(req.getUri)

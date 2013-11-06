@@ -16,7 +16,7 @@ object Lookup
     md.update(name.getBytes(utf8))
     val k = BigInt(new BigInteger(1, md.digest()))
     val x = k % (1 << (i + 1))
-    if (x > n)
+    if (x >= n)
       (k % (1 << i)).intValue()
     else
       x.intValue()

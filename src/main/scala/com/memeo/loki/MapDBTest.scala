@@ -10,7 +10,8 @@ import java.io.File
 class MapDBTest
 {
   val db = DBMaker.newFileDB(new File("test.db")).make()
-  val m = db.createTreeMap[Object, Object]("_main", 8, true, null, null, null)
+  val maker = db.createTreeMap("_main")
+  val m = maker.nodeSize(8).valuesStoredOutsideNodes(true).makeOrGet[String, String]()
   m.put("_revision", "1")
   db.commit()
   db.close()

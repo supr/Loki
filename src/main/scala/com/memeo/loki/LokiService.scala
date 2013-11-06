@@ -16,8 +16,6 @@
 
 package com.memeo.loki
 
-import org.jboss.netty.handler.codec.http.HttpMethod._
-import org.jboss.netty.handler.codec.http.HttpResponseStatus._
 import net.liftweb.json.JsonAST._
 import net.liftweb.json.JsonDSL._
 import net.liftweb.json.DefaultFormats
@@ -35,6 +33,9 @@ import akka.event.Logging
 import java.net.URLDecoder
 import collection.convert.WrapAsScala
 import collection.mutable.ListBuffer
+
+import com.memeo.loki.Method._
+import com.memeo.loki.Status._
 
 class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
 {
@@ -178,7 +179,13 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                   val container = d.get
                   try
                   {
-                    val m = container.createTreeMap[Key, Value]("_main", 32, true, new KeySerializer(), new ValueSerializer(), new KeyComparator())
+                    val maker = container.createTreeMap("_main")
+                    val m = maker.nodeSize(32)
+                      .valuesStoredOutsideNodes(true)
+                      .comparator(new KeyComparator)
+                      .keySerializer(new KeySerializer)
+                      .valueSerializer(new ValueSerializer)
+                      .makeOrGet[Key, Value]()
                     val key = new ObjectKey(Map[String, Key]())
                     val value = new Document(Map("version" -> IntMember(BigInt(0))))
                     m.put(key, new Value(key, BigInt(0), false, value, List()))
@@ -268,7 +275,7 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
   }
 
   def doc(request:Request, dbname:String, docname:String, sender:ActorRef) = {
-    config.peers(Lookup.hash(dbname, config.i, config.n)) match {
+    config.peers(Lookup.hash(dbname, config.n, config.i)) match {
       case s:Self => {
         request.method match {
           case GET => {

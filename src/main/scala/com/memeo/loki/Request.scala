@@ -17,20 +17,25 @@ import net.liftweb.json.JsonAST.JArray
  * Time: 4:41 PM
  * To change this template use File | Settings | File Templates.
  */
-class Request(val method:HttpMethod, val name:String, val value:JValue, val headers:JObject, val params:JObject)
+object Method extends Enumeration {
+  type Method = Value
+  val DELETE, GET, HEAD, POST, PUT = Value
+}
+
+class Request(val method:Method.Value, val name:String, val value:JValue, val headers:JObject, val params:JObject)
 {
   def toValue:JValue = {
-    JArray(List(JString(method.getName), JString(name), value, headers, params))
+    JArray(List(JString(method.toString), JString(name), value, headers, params))
   }
 }
 
 object Request
 {
-  def apply(method:HttpMethod, name:String, value:JValue, headers:JObject, params:JObject):Request =
+  def apply(method:Method.Value, name:String, value:JValue, headers:JObject, params:JObject):Request =
     new Request(method, name, value, headers, params)
 
   def apply(method:String, name:String, value:JValue, headers:JObject, params:JObject):Request =
-    Request(HttpMethod.valueOf(method), name, value, headers, params)
+    Request(Method.withName(method), name, value, headers, params)
 }
 
 class RequestSerializer extends Serializer
@@ -52,9 +57,9 @@ class RequestSerializer extends Serializer
   def fromBinary(bytes: Array[Byte], manifest: Option[Class[_]]): AnyRef = {
     JsonParser.parse(new InputStreamReader(new ByteArrayInputStream(bytes))) match {
       case JArray(List(method:JString, name:JString, value:JValue, headers:JObject, params:JObject)) =>
-        Request(HttpMethod.valueOf(method.values), name.values, value, headers, params)
+        Request(Method.withName(method.values), name.values, value, headers, params)
       case JArray(List(method:JString, name:JString, headers:JObject, params:JObject)) =>
-        Request(HttpMethod.valueOf(method.values), name.values, JNothing, headers, params)
+        Request(Method.withName(method.values), name.values, JNothing, headers, params)
       case z => throw new IOException("can't deserialize request: " + z)
     }
   }

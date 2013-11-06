@@ -16,12 +16,11 @@
 
 package com.memeo.loki
 
-import junit.framework.Assert._
-import junit.framework.TestCase
-import junit.framework.Test
+import org.junit.Assert._
+import org.junit.Test
 import java.io.{ByteArrayInputStream, DataInputStream, DataOutputStream, ByteArrayOutputStream}
 
-class TestKeySerializer extends TestCase
+class TestKeySerializer
 {
   def inout(keys:Array[Key]):Array[Key] = {
     inout(keys, 0, keys.length)
@@ -31,9 +30,9 @@ class TestKeySerializer extends TestCase
     val bout = new ByteArrayOutputStream()
     val dout = new DataOutputStream(bout)
     val serial = new KeySerializer()
-    serial.serialize(dout, start, end, keys)
+    serial.serialize(dout, start, end, keys.asInstanceOf[Array[AnyRef]])
     val din = new DataInputStream(new ByteArrayInputStream(bout.toByteArray))
-    serial.deserialize(din, start, end)
+    serial.deserialize(din, start, end, keys.size).asInstanceOf[Array[Key]]
   }
 
   @Test def testNull() = {
