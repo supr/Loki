@@ -36,6 +36,7 @@ import collection.mutable.ListBuffer
 
 import com.memeo.loki.Method._
 import com.memeo.loki.Status._
+import com.google.common.cache.CacheBuilder
 
 class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
 {
@@ -47,6 +48,9 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
   import context.dispatcher
   implicit val timeout = Timeout(30 seconds)
   implicit val dbdir = dbDir
+
+  val dbCache = CacheBuilder.newBuilder().concurrencyLevel(Runtime.getRuntime.availableProcessors())
+    .maximumSize(1024).
 
   def receive = {
     case request:Request => {

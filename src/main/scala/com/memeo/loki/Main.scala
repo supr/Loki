@@ -41,7 +41,7 @@ object Main extends App
   }
   implicit val system = ActorSystem("loki", ConfigFactory.parseString("akka.remote.netty.port=" + (7777 + me)).withFallback(ConfigFactory.parseFile(new File("akka.conf")).withFallback(ConfigFactory.defaultOverrides())));
   val logger = Logging(system, getClass())
-  val service = system.actorOf(Props(new LokiService(new File("loki" + me), new conf())), name = "loki")
+  val service = system.actorOf(Props(new LokiService(new File("loki" + me), new conf())), "loki")
   import scala.concurrent.ExecutionContext.Implicits.global
   val httpServer = HttpServer.createSimpleServer(null, 8080 + me)
   httpServer.getServerConfiguration.addHttpHandler(new GrizzlyAdapter(service), "/")

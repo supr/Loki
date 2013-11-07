@@ -38,6 +38,8 @@ class Request(val method:Method.Value, val name:String, val value:JValue, val he
   def toValue:JValue = {
     JArray(List(JString(method.toString), JString(name), value, headers, params))
   }
+
+  override def toString: String = s"Request($method, '$name', $value, $headers, $params)"
 }
 
 object Request
@@ -58,12 +60,7 @@ object Request
     }).toList)
   }
 
-  def apply(request:org.glassfish.grizzly.http.server.Request) = {
-    val value = request.getMethod match {
-      case org.glassfish.grizzly.http.Method.PUT|org.glassfish.grizzly.http.Method.POST =>
-        JsonParser.parse(request.getNIOReader, false)
-      case _ => JNothing
-    }
+  def apply(request:org.glassfish.grizzly.http.server.Request, value:JValue) = {
     new Request(Method.of(request.getMethod), request.getRequestURI, value, headers(request), params(request))
   }
 

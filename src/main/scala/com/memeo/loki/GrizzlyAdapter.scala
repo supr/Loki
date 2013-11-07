@@ -16,6 +16,7 @@
 
 package com.memeo.loki
 
+import scala.concurrent.{future, promise}
 import scala.concurrent.duration._
 import org.glassfish.grizzly.http.server.HttpHandler
 import akka.actor.{ActorSystem, ActorRef}
@@ -30,6 +31,11 @@ import java.nio.charset.Charset
 import org.glassfish.grizzly.http.io.BinaryNIOOutputSink
 import org.glassfish.grizzly.memory.ByteBufferWrapper
 import java.nio.ByteBuffer
+import org.glassfish.grizzly.{ReadHandler, http}
+import java.io.{ByteArrayInputStream, InputStreamReader, ByteArrayOutputStream}
+import net.liftweb.json.JsonParser
+import scala.util.{Try, Success, Failure}
+import scala.tools.scalap.scalax.rules.Choice
 
 class GrizzlyAdapter(val serviceActor:ActorRef)(implicit val context:ExecutionContext, implicit val system:ActorSystem) extends HttpHandler
 {
@@ -41,8 +47,57 @@ class GrizzlyAdapter(val serviceActor:ActorRef)(implicit val context:ExecutionCo
                        response: org.glassfish.grizzly.http.server.Response):Unit = {
     logger.info("servicing {} {}", request.getMethod, request.getRequestURI)
     response.suspend()
+    val requestPromise = promise[Try[Request]]()
+    request.getMethod match {
+      case http.Method.PUT | http.Method.POST => {
+        val buffer = request.getContentLength match {
+          case i:Int if i <= 0 => new ByteArrayOutputStream()
+          case i:Int => new ByteArrayOutputStream(i)
+        }
+        val input = request.getNIOInputStream
+        input.notifyAvailable(new ReadHandler {
+          def onError(t: Throwable) = {
+            logger.warning("onError {}", t)
+            requestPromise.success(Failure(t))
+          }
+
+          def onDataAvailable() = {
+            logger.info("onDataAvailable")
+            val available = input.available()
+            logger.info("available={}", available)
+            val buf = new Array[Byte](available)
+            val read = input.read(buf)
+            buffer.write(buf, 0, read)
+            logger.info("read {} bytes of body", read)
+          }
+
+          def onAllDataRead() = {
+            logger.info("onAllDataRead()")
+            val available = input.available()
+            logger.info("available={}", available)
+            if (available > 0) {
+              val buf = new Array[Byte](available)
+              input.read(buf)
+              buffer.write(buf)
+            }
+            logger.info("got body: {}", new String(buffer.toByteArray))
+            val req = Request(request, JsonParser.parse(new InputStreamReader(new ByteArrayInputStream(buffer.toByteArray))))
+            requestPromise.success(Success(req))
+            logger.info("completed request: {}", req)
+          }
+        })
+      }
+      case _ => requestPromise.success(Success(Request(request, JNothing)))
+    }
     for {
-      r <- serviceActor ? Request(request)
+      result <- requestPromise.future
+      r <- {
+        logger.info("got result:{}", result)
+        result match {
+          case succ:Success[Request] => serviceActor ? succ.get
+          case fail:Failure[Request] => future { fail.exception }
+        }
+      }
     } yield {
       r match {
         case resp:Response => {
@@ -60,6 +115,14 @@ class GrizzlyAdapter(val serviceActor:ActorRef)(implicit val context:ExecutionCo
               response.getNIOOutputStream.asInstanceOf[BinaryNIOOutputSink].write(new ByteBufferWrapper(ByteBuffer.wrap(json)))
             }
           }
+        }
+        case t:Throwable => {
+          response.setStatus(HttpStatus.INTERNAL_SERVER_ERROR_500)
+          val result = JObject(List(JField("error", JBool(value = true)), JField("reason", JString(t.getMessage))))
+          val json = compact(render(result)).getBytes(utf8)
+          response.setContentType("application/json")
+          response.setContentLength(json.length)
+          response.getNIOOutputStream.asInstanceOf[BinaryNIOOutputSink].write(new ByteBufferWrapper(ByteBuffer.wrap(json)))
         }
         case _ => {
           response.setStatus(HttpStatus.NOT_FOUND_404)
