@@ -175,7 +175,7 @@ class KeySerializer extends BTreeKeySerializer[Key] with Serializable
   }
 
   def deserialize(in: DataInput, start: Int, end: Int, size: Int): Array[AnyRef] = {
-    logger.info("deserialize {} {} {}", start, end, size)
+    logger.debug("deserialize {} {} {}", start, end, size)
     val buf = new ArrayBuffer[AnyRef](size)
     Range(0, start, 1).foreach(i => {
       logger.debug("prepend null {}", i)

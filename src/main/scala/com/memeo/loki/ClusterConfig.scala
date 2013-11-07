@@ -16,6 +16,8 @@
 
 package com.memeo.loki
 
+import akka.actor.{ActorRef, ActorSystem}
+
 abstract class Member(val id:Int, val name:String)
 case class Self(override val id:Int, override val name:String) extends Member(id, name)
 case class Peer(val ipcAddr:String, override val id:Int, override val name:String) extends Member(id, name)

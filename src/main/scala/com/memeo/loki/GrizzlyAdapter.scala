@@ -62,28 +62,27 @@ class GrizzlyAdapter(val serviceActor:ActorRef)(implicit val context:ExecutionCo
           }
 
           def onDataAvailable() = {
-            logger.info("onDataAvailable")
+            logger.debug("onDataAvailable")
             val available = input.available()
-            logger.info("available={}", available)
+            logger.debug("available={}", available)
             val buf = new Array[Byte](available)
             val read = input.read(buf)
             buffer.write(buf, 0, read)
-            logger.info("read {} bytes of body", read)
+            logger.debug("read {} bytes of body", read)
           }
 
           def onAllDataRead() = {
-            logger.info("onAllDataRead()")
+            logger.debug("onAllDataRead()")
             val available = input.available()
-            logger.info("available={}", available)
+            logger.debug("available={}", available)
             if (available > 0) {
               val buf = new Array[Byte](available)
               input.read(buf)
               buffer.write(buf)
             }
-            logger.info("got body: {}", new String(buffer.toByteArray))
             val req = Request(request, JsonParser.parse(new InputStreamReader(new ByteArrayInputStream(buffer.toByteArray))))
             requestPromise.success(Success(req))
-            logger.info("completed request: {}", req)
+            logger.debug("completed request: {}", req)
           }
         })
       }
@@ -92,7 +91,7 @@ class GrizzlyAdapter(val serviceActor:ActorRef)(implicit val context:ExecutionCo
     for {
       result <- requestPromise.future
       r <- {
-        logger.info("got result:{}", result)
+        logger.debug("got result:{}", result)
         result match {
           case succ:Success[Request] => serviceActor ? succ.get
           case fail:Failure[Request] => future { fail.exception }
@@ -101,7 +100,7 @@ class GrizzlyAdapter(val serviceActor:ActorRef)(implicit val context:ExecutionCo
     } yield {
       r match {
         case resp:Response => {
-          logger.info("service produced response {}", resp)
+          logger.debug("service produced response {}", resp)
           response.setStatus(resp.status.id)
           resp.headers.values.foreach {
             e => response.setHeader(e._1, e._2.toString)

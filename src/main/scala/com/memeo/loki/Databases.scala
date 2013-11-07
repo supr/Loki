@@ -16,65 +16,97 @@
 
 package com.memeo.loki
 
-import org.mapdb.{DBMaker, DB}
+import org.mapdb.{BTreeMap, DBMaker, DB}
 import collection.concurrent.TrieMap
 import java.io.{FilenameFilter, File}
 import collection.convert.WrapAsScala
+import com.google.common.cache.{Cache, CacheBuilder}
+import java.util.concurrent.{ExecutionException, Callable}
 
-class Databases(val dbdir: File) {
+class Database(val db:DB, val file:File, val isSnapshot:Boolean = false)
+{
+  private val cache:Cache[String, BTreeMap[Key, Value]] = CacheBuilder
+    .newBuilder()
+    .concurrencyLevel(Runtime.getRuntime.availableProcessors())
+    .softValues()
+    .maximumSize(32)
+    .build()
 
-  import Databases.dbs
-
-  def get(name: String, create: Boolean = true): Option[DB] = {
-    dbs.get(name) match {
-      case s: Some[DB] => {
-        if (create) None
-        else s
-      }
-      case None => {
-        val f = new File(dbdir, name.replace("/", ":") + ".ldb")
-        if (!f.exists()) {
-          if (!create) {
-            None
-          } else {
-            val db = DBMaker.newFileDB(new File(dbdir, name.replace("/", ":") + ".ldb")).make()
-            dbs.putIfAbsent(name, db) match {
-              case s: Some[DB] => {
-                db.close()
-                s
-              }
-              case None => Some(db)
-            }
+  def get(tableName:String, create:Boolean = true):Option[BTreeMap[Key, Value]] = {
+    try{
+      Some(cache.get(tableName, new Callable[BTreeMap[Key, Value]]() {
+        override def call():BTreeMap[Key, Value] = {
+          try {
+            db.getTreeMap[Key, Value](tableName)
           }
-        } else {
-          if (create) {
-            None
-          } else {
-            val db = DBMaker.newFileDB(new File(dbdir, name.replace("/", ":") + ".ldb")).make()
-            dbs.putIfAbsent(name, db) match {
-              case s: Some[DB] => {
-                db.close()
-                s
-              }
-              case None => Some(db)
+          catch {
+            case e:NoSuchElementException if create => {
+              db.createTreeMap(tableName)
+                .nodeSize(32)
+                .valuesStoredOutsideNodes(true)
+                .comparator(new KeyComparator)
+                .keySerializer(new KeySerializer)
+                .valueSerializer(new ValueSerializer)
+                .make[Key, Value]()
             }
           }
         }
-      }
+      }))
+    }
+    catch {
+      case e:NoSuchElementException => None
     }
   }
 
-  def snapshot(name: String): Option[DB] = {
+  def snapshot():Database = {
+    new Database(db.snapshot(), file, true)
+  }
+
+  def compact():Unit = db.compact()
+  def commit():Unit = db.commit()
+  def close():Unit = db.close()
+  def rollback():Unit = db.rollback()
+
+  def delete():Unit = {
+    db.close()
+    val dir = file.getParentFile
+    dir.listFiles(new FilenameFilter {
+      def accept(dir: File, name: String): Boolean = name.startsWith(file.getName)
+    }).foreach(f => f.delete())
+  }
+}
+
+class Databases(val dbdir: File)
+{
+  import Databases.dbCache
+
+  def get(name: String, create: Boolean = true): Option[Database] = {
+    try {
+      Some(dbCache.get(name, new Callable[Database]() {
+        override def call():Database = {
+          val f = new File(dbdir, name.replace("/", ":") + ".ldb")
+          if (!f.exists()) {
+            if (!create)
+              throw new NoSuchElementException
+          }
+          new Database(DBMaker.newFileDB(f).strictDBGet().make(), f)
+        }
+      }))
+    }
+    catch {
+      case e:ExecutionException if e.getCause.isInstanceOf[NoSuchElementException] => None
+    }
+  }
+
+  def snapshot(name: String): Option[Database] = {
     get(name, false) match {
-      case db: Some[DB] => Some(db.get.snapshot())
+      case db: Some[Database] => Some(db.get.snapshot())
       case None => None
     }
   }
 
   def delete(name: String): Unit = {
-    if (dbs.contains(name)) {
-      dbs.remove(name)
-    }
+    dbCache.invalidate(name)
 
     dbdir.listFiles(new FilenameFilter {
       def accept(dir: File, name: String): Boolean = name.startsWith(name.replace("/", ":") + ".ldb")
@@ -82,8 +114,14 @@ class Databases(val dbdir: File) {
   }
 }
 
-object Databases {
-  private val dbs: collection.concurrent.Map[String, DB] = new TrieMap[String, DB]()
+object Databases
+{
+  private val dbCache:Cache[String, Database] = CacheBuilder
+    .newBuilder()
+    .concurrencyLevel(Runtime.getRuntime.availableProcessors())
+    .softValues()
+    .maximumSize(1024)
+    .build()
 
   def apply()(implicit dbdir: File) = new Databases(dbdir)
 }
