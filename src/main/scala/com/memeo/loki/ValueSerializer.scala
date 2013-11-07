@@ -86,7 +86,7 @@ class ValueSerializer extends Serializer[Value] with Serializable
   }
 
   def serializeMember(out: DataOutput, value: DocumentMember):Unit = {
-    logger.info("serializeMember {}", value)
+    logger.debug("serializeMember {}", value)
     value match {
       case NullMember => out.write(TypeNull)
       case BoolMember(false) => out.write(TypeFalse)

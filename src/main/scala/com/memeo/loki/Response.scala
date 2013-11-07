@@ -41,6 +41,10 @@ object Status extends Enumeration
 class Response(val status:Status.Status, val value:JValue, val headers:JObject)
 {
   def toValue():JValue = JArray(List(JInt(status.id), value, headers))
+
+  override def toString:String = {
+    f"com.memeo.loki.Response($status, $value, $headers)"
+  }
 }
 
 object Response

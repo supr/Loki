@@ -8,6 +8,7 @@ import java.util.concurrent.Executors
 import java.io.File
 import com.typesafe.config.ConfigFactory
 import akka.event.Logging
+import org.glassfish.grizzly.http.server.HttpServer
 
 /**
  * Created with IntelliJ IDEA.
@@ -38,13 +39,12 @@ object Main extends App
     override val n = n_
     override val peers = peers_
   }
-  val system = ActorSystem("loki", ConfigFactory.parseString("akka.remote.netty.port=" + (7777 + me)).withFallback(ConfigFactory.parseFile(new File("akka.conf")).withFallback(ConfigFactory.defaultOverrides())));
+  implicit val system = ActorSystem("loki", ConfigFactory.parseString("akka.remote.netty.port=" + (7777 + me)).withFallback(ConfigFactory.parseFile(new File("akka.conf")).withFallback(ConfigFactory.defaultOverrides())));
   val logger = Logging(system, getClass())
   val service = system.actorOf(Props(new LokiService(new File("loki" + me), new conf())), name = "loki")
-  val bootstrap = new ServerBootstrap(new NioServerSocketChannelFactory(Executors.newCachedThreadPool(), Executors.newCachedThreadPool()))
-  bootstrap.setPipelineFactory(new HttpServerPipelineFactory(service, system))
-  val bindAddress = new InetSocketAddress(8080 + me)
-  bootstrap.bind(bindAddress)
+  import scala.concurrent.ExecutionContext.Implicits.global
+  val httpServer = HttpServer.createSimpleServer(null, 8080 + me)
+  httpServer.getServerConfiguration.addHttpHandler(new GrizzlyAdapter(service), "/")
+  httpServer.start()
   logger.info("Loki has started me={} i={} n={}", me, i_, n_)
-  logger.info("http={}", bindAddress)
 }

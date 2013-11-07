@@ -14,24 +14,11 @@
  * limitations under the License.
  */
 
-package com.memeo.loki
+package com.memeo.loki.api;
 
-abstract class Member(val id:Int, val name:String)
-case class Self(override val id:Int, override val name:String) extends Member(id, name)
-case class Peer(val ipcAddr:String, override val id:Int, override val name:String) extends Member(id, name)
+import java.util.List;
 
-/**
- * Copyright (C) 2013 Memeo, Inc.
- * All Rights Reserved
- */
-trait ClusterConfig
+public interface ReduceFunction
 {
-  def n:Int
-  def i:Int
-
-  /**
-   * A list of node numbers mapped to members (either self,
-   * or a remote peer).
-   */
-  def peers:Map[Int, Member]
+    AST.Value reduce(List<AST.Value> keys, List<AST.Value> values, boolean rereduce);
 }

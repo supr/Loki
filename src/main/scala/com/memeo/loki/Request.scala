@@ -2,13 +2,14 @@ package com.memeo.loki
 
 import net.liftweb.json.JsonAST._
 import net.liftweb.json.{JsonParser, compact, render}
-import org.jboss.netty.handler.codec.http.HttpMethod
 import akka.serialization.Serializer
 import java.nio.charset.Charset
 import java.io.{IOException, ByteArrayInputStream, InputStreamReader}
 import net.liftweb.json.JsonAST.JObject
 import net.liftweb.json.JsonAST.JString
 import net.liftweb.json.JsonAST.JArray
+import scala.collection.convert.Wrappers.{JSetWrapper, JIterableWrapper}
+import scala.collection.mutable.ListBuffer
 
 /**
  * Created with IntelliJ IDEA.
@@ -20,6 +21,16 @@ import net.liftweb.json.JsonAST.JArray
 object Method extends Enumeration {
   type Method = Value
   val DELETE, GET, HEAD, POST, PUT = Value
+
+  def of(method:org.glassfish.grizzly.http.Method) = {
+    method match {
+      case org.glassfish.grizzly.http.Method.DELETE => DELETE
+      case org.glassfish.grizzly.http.Method.GET => GET
+      case org.glassfish.grizzly.http.Method.HEAD => HEAD
+      case org.glassfish.grizzly.http.Method.POST => POST
+      case org.glassfish.grizzly.http.Method.PUT => PUT
+    }
+  }
 }
 
 class Request(val method:Method.Value, val name:String, val value:JValue, val headers:JObject, val params:JObject)
@@ -31,6 +42,31 @@ class Request(val method:Method.Value, val name:String, val value:JValue, val he
 
 object Request
 {
+  def headers(request:org.glassfish.grizzly.http.server.Request):JObject = {
+    JObject(JIterableWrapper(request.getHeaderNames()).map(name => {
+      JIterableWrapper(request.getHeaders(name)).map(value => {
+        JField(name, JString(value))
+      })
+    }).foldLeft[ListBuffer[JField]](ListBuffer())((l, f) => {
+      l ++= f
+    }).result())
+  }
+
+  def params(request:org.glassfish.grizzly.http.server.Request):JObject = {
+    JObject(JSetWrapper(request.getParameterNames).map(name => {
+      JField(name, JString(request.getParameter(name)))
+    }).toList)
+  }
+
+  def apply(request:org.glassfish.grizzly.http.server.Request) = {
+    val value = request.getMethod match {
+      case org.glassfish.grizzly.http.Method.PUT|org.glassfish.grizzly.http.Method.POST =>
+        JsonParser.parse(request.getNIOReader, false)
+      case _ => JNothing
+    }
+    new Request(Method.of(request.getMethod), request.getRequestURI, value, headers(request), params(request))
+  }
+
   def apply(method:Method.Value, name:String, value:JValue, headers:JObject, params:JObject):Request =
     new Request(method, name, value, headers, params)
 

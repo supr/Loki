@@ -143,8 +143,8 @@ class KeySerializer extends BTreeKeySerializer[Key] with Serializable
   def deserializeKey(in: DataInput, t:Byte):Key = {
     t match {
       case TypeNull => NullKey
-      case TypeFalse => BoolKey(false)
-      case TypeTrue => BoolKey(true)
+      case TypeFalse => BoolKey(value = false)
+      case TypeTrue => BoolKey(value = true)
       case TypeDouble => {
         DoubleKey(in.readDouble())
       }
@@ -178,11 +178,11 @@ class KeySerializer extends BTreeKeySerializer[Key] with Serializable
     logger.info("deserialize {} {} {}", start, end, size)
     val buf = new ArrayBuffer[AnyRef](size)
     Range(0, start, 1).foreach(i => {
-      logger.info("prepend null {}", i)
+      logger.debug("prepend null {}", i)
       buf += null
     })
     Range(start, end, 1).foreach(i => {
-      logger.info("deserialize {}", i)
+      logger.debug("deserialize {}", i)
       in.readByte() match {
         case TypeSerializable => {
           val len = in.readInt()
@@ -196,7 +196,7 @@ class KeySerializer extends BTreeKeySerializer[Key] with Serializable
       }
     })
     Range(end, size, 1).foreach(i => {
-      logger.info("append null {}", i)
+      logger.debug("append null {}", i)
       buf += null
     })
     buf.toArray
