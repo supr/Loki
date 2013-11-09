@@ -35,8 +35,6 @@ object KeyComparator
  */
 class KeyComparator extends Comparator[Key] with Serializable
 {
-  import KeyComparator._
-
   def compare(k1: Key, k2: Key): Int = {
     val res:Int = k1 match {
       case NullKey => k2 match {
@@ -90,7 +88,7 @@ class KeyComparator extends Comparator[Key] with Serializable
         case NullKey|BoolKey(_)|IntKey(_)|DoubleKey(_)|StringKey(_)|ArrayKey(_) => 1
         case o2:ObjectKey => {
           val res = o1.value.zip(o2.value).foldLeft(0)((res, e) => {
-            if (res == 0) collator.compare(e._1._1, e._2._1) else res
+            if (res == 0) KeyComparator.collator.compare(e._1._1, e._2._1) else res
           })
           if (res == 0) o1.value.size.compare(o2.value.size) else res
         }

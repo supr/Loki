@@ -20,16 +20,22 @@ import org.mapdb.{BTreeMap, DBMaker, DB}
 import collection.concurrent.TrieMap
 import java.io.{FilenameFilter, File}
 import collection.convert.WrapAsScala
-import com.google.common.cache.{Cache, CacheBuilder}
+import com.google.common.cache.{RemovalNotification, RemovalListener, Cache, CacheBuilder}
 import java.util.concurrent.{ExecutionException, Callable}
+import akka.actor.ActorSystem
 
-class Database(val db:DB, val file:File, val isSnapshot:Boolean = false)
+class Database(val db:DB, val file:File, val isSnapshot:Boolean = false)(implicit val system:ActorSystem)
 {
   private val cache:Cache[String, BTreeMap[Key, Value]] = CacheBuilder
     .newBuilder()
     .concurrencyLevel(Runtime.getRuntime.availableProcessors())
     .softValues()
     .maximumSize(32)
+    .removalListener(new RemovalListener[String, BTreeMap[Key, Value]] {
+      def onRemoval(notification: RemovalNotification[String, BTreeMap[Key, Value]]) = {
+        db.commit()
+      }
+    })
     .build()
 
   def get(tableName:String, create:Boolean = true):Option[BTreeMap[Key, Value]] = {
@@ -41,13 +47,18 @@ class Database(val db:DB, val file:File, val isSnapshot:Boolean = false)
           }
           catch {
             case e:NoSuchElementException if create => {
-              db.createTreeMap(tableName)
-                .nodeSize(32)
-                .valuesStoredOutsideNodes(true)
-                .comparator(new KeyComparator)
-                .keySerializer(new KeySerializer)
-                .valueSerializer(new ValueSerializer)
-                .make[Key, Value]()
+              Profiling.begin("create_new_table")
+              try {
+                db.createTreeMap(tableName)
+                  .nodeSize(32)
+                  .valuesStoredOutsideNodes(true)
+                  .comparator(new KeyComparator)
+                  .keySerializer(new KeySerializer)
+                  .valueSerializer(new ValueSerializer)
+                  .make[Key, Value]()
+              } finally {
+                Profiling.end("create_new_table")
+              }
             }
           }
         }
@@ -63,7 +74,14 @@ class Database(val db:DB, val file:File, val isSnapshot:Boolean = false)
   }
 
   def compact():Unit = db.compact()
-  def commit():Unit = db.commit()
+  def commit():Unit = {
+    Profiling.begin("db_commit")
+    try {
+      db.commit()
+    } finally {
+      Profiling.end("db_commit")
+    }
+  }
   def close():Unit = db.close()
   def rollback():Unit = db.rollback()
 
@@ -76,7 +94,7 @@ class Database(val db:DB, val file:File, val isSnapshot:Boolean = false)
   }
 }
 
-class Databases(val dbdir: File)
+class Databases(val dbdir: File)(implicit val system:ActorSystem)
 {
   import Databases.dbCache
 
@@ -89,7 +107,12 @@ class Databases(val dbdir: File)
             if (!create)
               throw new NoSuchElementException
           }
-          new Database(DBMaker.newFileDB(f).strictDBGet().make(), f)
+          Profiling.begin("create_new_db")
+          try {
+            new Database(DBMaker.newFileDB(f).strictDBGet().asyncWriteDisable().make(), f)
+          } finally {
+            Profiling.end("create_new_db")
+          }
         }
       }))
     }
@@ -121,7 +144,15 @@ object Databases
     .concurrencyLevel(Runtime.getRuntime.availableProcessors())
     .softValues()
     .maximumSize(1024)
+    .removalListener(new RemovalListener[String, Database] {
+      def onRemoval(notification: RemovalNotification[String, Database]) = {
+        Option(notification.getValue) match {
+          case s:Some[Database] => s.get.commit()
+          case None => Unit
+        }
+      }
+    })
     .build()
 
-  def apply()(implicit dbdir: File) = new Databases(dbdir)
+  def apply()(implicit dbdir: File, system:ActorSystem) = new Databases(dbdir)
 }

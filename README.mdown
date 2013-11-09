@@ -1,1 +1,39 @@
 Loki, a storage system.
+
+Quick start:
+
+    mvn clean compile scala:compile dependency:copy-dependencies
+    mkdir loki0 loki1 loki2 loki3
+
+    # In four separate terminals:
+    scala -classpath `ls target/dependency/*.jar | tr '\n' ':'`:target/classes com.memeo.loki.Main 0 2 0
+    scala -classpath `ls target/dependency/*.jar | tr '\n' ':'`:target/classes com.memeo.loki.Main 1 2 0
+    scala -classpath `ls target/dependency/*.jar | tr '\n' ':'`:target/classes com.memeo.loki.Main 2 2 0
+    scala -classpath `ls target/dependency/*.jar | tr '\n' ':'`:target/classes com.memeo.loki.Main 3 2 0
+
+    curl -X PUT http://localhost:8080/dbname
+    curl -X PUT -d '{"foo":"bar"}' http://localhost:8080/dbname/docname
+
+You can also use port 8081, 8082, or 8083.
+
+The three command line parameters are *my-id*, *i*, and *n*. *i* and *n* are parameters for the linear hashing
+algorithm used to balance storage throughout the cluster. For a given value of *i*, there can be 2<sup>*i*</sup>
+nodes in that cluster.
+
+## How it works
+
+The primary class is `LokiService`, which is an Akka Actor that receives pseudo-HTTP requests (the request contents
+are the same, the methods and response codes are the same, and there can be headers, but it isn't formatted as HTTP).
+A Grizzly HTTP listener handles HTTP requests, decodes the HTTP, and forwards it to the actor.
+Storage is split by database, so if a request to node *A* arrives for a database stored on node *B*, node *A* forwards
+the request to the remote actor on node *B*, gets the reply from node *B*, and responds to the HTTP request.
+
+## TODO
+
+* Zookeeper-based cluster configuration.
+* Map/reduce views (probably any JVM language: JavaScript, Groovy, etc).
+* Write replication (the idea is that a write to node *n* would replicate to nodes *n-1* and *n+1*).
+* Request rerouting to replicas when the primary is offline.
+* Restoration of a primary from replicas.
+* Rebalancing of the cluster when it grows.
+* Protocol buffer interface, in addition to HTTP?

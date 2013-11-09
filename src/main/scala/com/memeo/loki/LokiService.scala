@@ -48,6 +48,7 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
   import context.dispatcher
   implicit val timeout = Timeout(30 seconds)
   implicit val dbdir = dbDir
+  implicit val system = context.system
 
   private val remoteActors:LoadingCache[String, ActorRef] = CacheBuilder
     .newBuilder()
@@ -72,6 +73,19 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
 
           // List all DBs.
           case List("_all_dbs") => allDbs(request, sender)
+
+          case List("_profiling") => request.method match {
+            case GET => {
+              val result = JObject(Profiling.ops.map((e) => {
+                JField(e._1, ("count" -> JInt(e._2._1))
+                  ~ ("total" -> JInt(e._2._2.toNanos))
+                  ~ ("avg" -> JString((e._2._2 / e._2._1).toString))
+                  ~ Nil)
+              }).toList)
+              sender ! Response(OK, result)
+            }
+            case _ => sender ! Response(METHOD_NOT_ALLOWED, "error" -> JBool(true))
+          }
 
           // Access values for a single container.
           case List(name:String) => database(request, name, sender)
@@ -370,7 +384,9 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                     if (old.isDefined && !old.get.deleted && old.get.genRev() != rev) {
                       sender ! Response(CONFLICT, ("result" -> JString("error")) ~ ("reason" -> JString("documnent update conflict")) ~ Nil)
                     } else {
+                      Profiling.begin("put_update")
                       val replaced = Option(db.put(docid, value))
+                      Profiling.end("put_update")
                       if (replaced.isDefined && replaced.get.genRev() != rev)
                       {
                         container.rollback()
@@ -408,7 +424,9 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                         case s:JString => {
                           if (v.genRev() == s.values) {
                             val newval = new Value(docid, old.seq + 1, true, new Document(Map()), new Revision(old.seq, old.revStr()) :: old.revisions)
+                            Profiling.begin("db_update_delete")
                             val replaced = db.put(docid, newval)
+                            Profiling.end("db_update_delete")
                             if (old.seq == replaced.seq) {
                               d.get.commit()
                               sender ! Response(OK, ("result" -> "ok") ~ ("rev" -> JString(newval.genRev())) ~ Nil)

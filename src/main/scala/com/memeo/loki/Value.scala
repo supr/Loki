@@ -24,6 +24,8 @@ import java.io.{OutputStream, DataOutputStream}
 import net.liftweb.json.JsonAST.JObject
 import net.liftweb.json.JsonAST.JBool
 import net.liftweb.json.JsonAST.JString
+import akka.event.Logging
+import akka.actor.ActorSystem
 
 sealed abstract class DocumentMember
 case object NullMember extends DocumentMember
@@ -42,7 +44,7 @@ class Revision(val seq:BigInt, val hash:String)
 
 object Value
 {
-  def apply(id:Key, seq:BigInt, v:JValue, revs:List[Revision]):Value = {
+  def apply(id:Key, seq:BigInt, v:JValue, revs:List[Revision])(implicit system:ActorSystem):Value = {
     v match {
       case o:JObject => new Value(id, seq, false,
         new Document(JValueConversion.unpackValue(o).asInstanceOf[ObjectMember].value.filter(e => !e._1.startsWith("_"))),
@@ -65,17 +67,22 @@ class Value(val id:Key, val seq:BigInt,
   }
 
   def revHash():Array[Byte] = {
-    val md = MessageDigest.getInstance("SHA-1")
-    val dos = new DataOutputStream(new OutputStream {
-      def write(b: Int) = md.update(b.toByte)
-      override def write(b:Array[Byte], offset:Int, length:Int) = md.update(b, offset, length)
-    })
-    val kser = new KeySerializer()
-    kser.serialize(dos, 0, 1, Array(id))
-    dos.writeBytes(seq.toString())
-    val ser = new ValueSerializer()
-    ser.serialize(dos, this)
-    md.digest()
+    Profiling.begin("compute_rev_hash")
+    try {
+      val md = MessageDigest.getInstance("SHA-1")
+      val dos = new DataOutputStream(new OutputStream {
+        def write(b: Int) = md.update(b.toByte)
+        override def write(b:Array[Byte], offset:Int, length:Int) = md.update(b, offset, length)
+      })
+      val kser = new KeySerializer()
+      kser.serialize(dos, 0, 1, Array(id))
+      dos.writeBytes(seq.toString())
+      val ser = new ValueSerializer()
+      ser.serialize(dos, this)
+      md.digest()
+    } finally {
+      Profiling.end("compute_rev_hash")
+    }
   }
 
   def revStr():String = {

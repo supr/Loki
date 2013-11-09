@@ -57,75 +57,78 @@ object ValueSerializer
 
 class ValueSerializer extends Serializer[Value] with Serializable
 {
-  import ValueSerializer._
-
   def serialize(out: DataOutput, value: Value) = {
-    out.write(BeginValue)
-    out.write(ValueId)
-    val kser = new KeySerializer()
-    kser.serializeKey(out, value.id)
-    out.write(SequenceId)
-    val v = value.seq.underlying().toByteArray()
-    out.writeInt(v.length)
-    out.write(v)
-    if (value.deleted) {
-      out.writeBoolean(true)
-      out.write(TypeArray)
-      value.revisions.foreach(rev => serializeMember(out, ArrayMember(Array(IntMember(rev.seq), StringMember(rev.hash)))))
-      out.write(TypeEnd)
+    Profiling.begin("serialize_value")
+    try {
+      out.write(ValueSerializer.BeginValue)
+      out.write(ValueSerializer.ValueId)
+      val kser = new KeySerializer()
+      kser.serializeKey(out, value.id)
+      out.write(ValueSerializer.SequenceId)
+      val v = value.seq.underlying().toByteArray()
+      out.writeInt(v.length)
+      out.write(v)
+      if (value.deleted) {
+        out.writeBoolean(true)
+        out.write(ValueSerializer.TypeArray)
+        value.revisions.foreach(rev => serializeMember(out, ArrayMember(Array(IntMember(rev.seq), StringMember(rev.hash)))))
+        out.write(ValueSerializer.TypeEnd)
+      }
+      else
+      {
+        out.writeBoolean(false)
+        serializeMember(out, ObjectMember(value.value.value))
+        out.write(ValueSerializer.TypeArray)
+        value.revisions.foreach(rev => serializeMember(out, ArrayMember(Array(IntMember(rev.seq), StringMember(rev.hash)))))
+        out.write(ValueSerializer.TypeEnd)
+      }
+      out.write(ValueSerializer.EndValue)
+    } finally {
+      Profiling.end("serialize_value")
     }
-    else
-    {
-      out.writeBoolean(false)
-      serializeMember(out, ObjectMember(value.value.value))
-      out.write(TypeArray)
-      value.revisions.foreach(rev => serializeMember(out, ArrayMember(Array(IntMember(rev.seq), StringMember(rev.hash)))))
-      out.write(TypeEnd)
-    }
-    out.write(EndValue)
   }
 
   def serializeMember(out: DataOutput, value: DocumentMember):Unit = {
-    logger.debug("serializeMember {}", value)
+    ValueSerializer.logger.debug("serializeMember {}", value)
     value match {
-      case NullMember => out.write(TypeNull)
-      case BoolMember(false) => out.write(TypeFalse)
-      case BoolMember(true) => out.write(TypeTrue)
+      case NullMember => out.write(ValueSerializer.TypeNull)
+      case BoolMember(false) => out.write(ValueSerializer.TypeFalse)
+      case BoolMember(true) => out.write(ValueSerializer.TypeTrue)
       case i:IntMember => {
         if (i.value.isValidInt)
         {
-          out.write(TypeInt)
+          out.write(ValueSerializer.TypeInt)
           out.writeInt(i.value.intValue())
         }
         else
         {
           val v = i.value.underlying().toByteArray()
-          out.write(TypeBigInt)
+          out.write(ValueSerializer.TypeBigInt)
           out.writeInt(v.length)
           out.write(v)
         }
       }
       case d:DoubleMember => {
-        out.write(TypeDouble)
+        out.write(ValueSerializer.TypeDouble)
         out.writeDouble(d.value)
       }
       case s:StringMember => {
-        val v = s.value.getBytes(utf8)
-        out.write(TypeString)
+        val v = s.value.getBytes(ValueSerializer.utf8)
+        out.write(ValueSerializer.TypeString)
         out.writeInt(v.length)
         out.write(v)
       }
       case a:ArrayMember => {
-        out.write(TypeArray)
+        out.write(ValueSerializer.TypeArray)
         a.value.foreach(e => serializeMember(out, e))
-        out.write(TypeEnd)
+        out.write(ValueSerializer.TypeEnd)
       }
       case o:ObjectMember => {
-        out.write(TypeObject)
+        out.write(ValueSerializer.TypeObject)
         o.value.foreach(e => serializeMember(out, new ArrayMember(Array(new StringMember(e._1), e._2))))
-        out.write(TypeEnd)
+        out.write(ValueSerializer.TypeEnd)
       }
-      case null => out.write(TypeNullRef)
+      case null => out.write(ValueSerializer.TypeNullRef)
     }
   }
 
@@ -135,38 +138,38 @@ class ValueSerializer extends Serializer[Value] with Serializable
 
   def deserializeMember(in:DataInput, t:Byte):DocumentMember = {
     t match {
-      case TypeNull => NullMember
-      case TypeFalse => BoolMember(false)
-      case TypeTrue => BoolMember(true)
-      case TypeInt => new IntMember(BigInt(in.readInt()))
-      case TypeBigInt => {
+      case ValueSerializer.TypeNull => NullMember
+      case ValueSerializer.TypeFalse => BoolMember(false)
+      case ValueSerializer.TypeTrue => BoolMember(true)
+      case ValueSerializer.TypeInt => new IntMember(BigInt(in.readInt()))
+      case ValueSerializer.TypeBigInt => {
         val v = new Array[Byte](in.readInt())
         in.readFully(v)
         new IntMember(BigInt(new BigInteger(v)))
       }
-      case TypeDouble => new DoubleMember(in.readDouble())
-      case TypeString => {
+      case ValueSerializer.TypeDouble => new DoubleMember(in.readDouble())
+      case ValueSerializer.TypeString => {
         val v = new Array[Byte](in.readInt())
         in.readFully(v)
-        new StringMember(new String(v, utf8))
+        new StringMember(new String(v, ValueSerializer.utf8))
       }
-      case TypeArray => {
+      case ValueSerializer.TypeArray => {
         val buf = new ArrayBuffer[DocumentMember]()
         deserializeArray(in, buf)
         new ArrayMember(buf.toArray)
       }
-      case TypeObject => {
+      case ValueSerializer.TypeObject => {
         val map = new mutable.LinkedHashMap[String, DocumentMember]()
         deserializeObject(in, map)
         new ObjectMember(map.toMap)
       }
-      case TypeNullRef => null
+      case ValueSerializer.TypeNullRef => null
     }
   }
 
   def deserializeArray(in:DataInput, buf:ArrayBuffer[DocumentMember]):Unit = {
     in.readByte() match {
-      case TypeEnd => Unit
+      case ValueSerializer.TypeEnd => Unit
       case x => {
         buf += deserializeMember(in, x)
         deserializeArray(in, buf)
@@ -176,7 +179,7 @@ class ValueSerializer extends Serializer[Value] with Serializable
 
   def deserializeObject(in:DataInput, map:mutable.LinkedHashMap[String, DocumentMember]):Unit = {
     in.readByte() match {
-      case TypeArray => {
+      case ValueSerializer.TypeArray => {
         val buf = new ArrayBuffer[DocumentMember](2)
         deserializeArray(in, buf)
         val kv = buf.toArray
@@ -185,13 +188,13 @@ class ValueSerializer extends Serializer[Value] with Serializable
         map += (kv(0).asInstanceOf[StringMember].value -> kv(1))
         deserializeObject(in, map)
       }
-      case TypeEnd => Unit
+      case ValueSerializer.TypeEnd => Unit
       case _ => throw new IOException("malformed serialized object (excepting key/value or end)")
     }
   }
 
   def deserializeDoc(in: DataInput):Document = {
-    if (in.readByte() != TypeObject)
+    if (in.readByte() != ValueSerializer.TypeObject)
       throw new IOException("malformed serialized value (expecting begin root object)")
     val m = new mutable.LinkedHashMap[String, DocumentMember]()
     deserializeObject(in, m)
@@ -200,8 +203,8 @@ class ValueSerializer extends Serializer[Value] with Serializable
 
   def deserializeRevisions(in:DataInput, buf:ArrayBuffer[Revision]):Unit = {
     in.readByte() match {
-      case TypeEnd => Unit
-      case TypeArray => {
+      case ValueSerializer.TypeEnd => Unit
+      case ValueSerializer.TypeArray => {
         val a = new ArrayBuffer[DocumentMember]()
         deserializeArray(in, a)
         if (a.size != 2 || !a(0).isInstanceOf[IntMember] || !a(1).isInstanceOf[StringMember])
@@ -213,43 +216,48 @@ class ValueSerializer extends Serializer[Value] with Serializable
   }
 
   def deserialize(din: DataInput, available: Int): Value = {
+    Profiling.begin("deserialize_value")
     val b = new Array[Byte](available)
     din.readFully(b)
     val in = new DataInputStream(new ByteArrayInputStream(b))
-    in.readByte() match {
-      case EndValue => null
-      case BeginValue => {
-        if (in.readByte() != ValueId)
-          throw new IOException("malformed serialized value (no begin ID)")
-        val kser = new KeySerializer()
-        val id = kser.deserializeKey(in)
-        if (in.readByte() != SequenceId)
-          throw new IOException("malformed serialized value (no begin seq)")
-        val len = in.readInt()
-        val v = new Array[Byte](len)
-        in.readFully(v)
-        val seq = BigInt(new BigInteger(v))
-        val deleted = in.readBoolean()
-        if (deleted)
-        {
-          val doc = new Document(Map())
-          val revs = new ArrayBuffer[Revision]()
-          if (in.readByte() != TypeArray)
-            throw new IOException("malformed revisions list")
-          deserializeRevisions(in, revs)
-          new Value(id, seq, true, doc, revs.toList)
+    try {
+      in.readByte() match {
+        case ValueSerializer.EndValue => null
+        case ValueSerializer.BeginValue => {
+          if (in.readByte() != ValueSerializer.ValueId)
+            throw new IOException("malformed serialized value (no begin ID)")
+          val kser = new KeySerializer()
+          val id = kser.deserializeKey(in)
+          if (in.readByte() != ValueSerializer.SequenceId)
+            throw new IOException("malformed serialized value (no begin seq)")
+          val len = in.readInt()
+          val v = new Array[Byte](len)
+          in.readFully(v)
+          val seq = BigInt(new BigInteger(v))
+          val deleted = in.readBoolean()
+          if (deleted)
+          {
+            val doc = new Document(Map())
+            val revs = new ArrayBuffer[Revision]()
+            if (in.readByte() != ValueSerializer.TypeArray)
+              throw new IOException("malformed revisions list")
+            deserializeRevisions(in, revs)
+            new Value(id, seq, true, doc, revs.toList)
+          }
+          else
+          {
+            val doc = deserializeDoc(in)
+            val revs = new ArrayBuffer[Revision]()
+            if (in.readByte() != ValueSerializer.TypeArray)
+              throw new IOException("malformed revisions list")
+            deserializeRevisions(in, revs)
+            new Value(id, seq, false, doc, revs.toList)
+          }
         }
-        else
-        {
-          val doc = deserializeDoc(in)
-          val revs = new ArrayBuffer[Revision]()
-          if (in.readByte() != TypeArray)
-            throw new IOException("malformed revisions list")
-          deserializeRevisions(in, revs)
-          new Value(id, seq, false, doc, revs.toList)
-        }
+        case x => throw new IOException("malformed serialized value: " + x)
       }
-      case x => throw new IOException("malformed serialized value: " + x)
+    } finally {
+      Profiling.end("deserialize_value")
     }
   }
 }
