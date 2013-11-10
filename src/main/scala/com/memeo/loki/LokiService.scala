@@ -81,6 +81,12 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
           // List all DBs.
           case List("_all_dbs") => allDbs(request, sender)
 
+          case List("_replica", dbname:String) =>
+            replicaDb(request, dbname, sender)
+
+          case List("_replica", dbname:String, docname:String) =>
+            replicaDoc(request, dbname, docname, sender)
+
           case List("_profiling") => request.method match {
             case GET => {
               val result = JObject(Profiling.ops.map((e) => {
@@ -112,9 +118,6 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
           case _ => sender ! Response(NOT_FOUND,
                                       ("result" -> JString("error")) ~ ("reason" -> JString("not found")) ~ Nil,
                                       JObject(List()))
-
-          case List("_replica", dbname:String, docname:String) =>
-            replicaDoc(request, dbname, docname, sender)
         }
       } catch {
         case e:Exception => {
@@ -255,10 +258,26 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                     val value = new Document(Map("version" -> IntMember(BigInt(0))))
                     m.put(key, new Value(key, BigInt(0), false, value, List()))
                     container.commit()
-                    sender ! Response(OK,
-                      ("result" -> JString("OK"))
-                        ~ ("created" -> JBool(true))
-                        ~ ("peer" -> JInt(s.id)) ~ Nil)
+                    if (config.nodeCount >= 3) {
+                      val peer0 = config.peers.get(config.prev).get.asInstanceOf[Peer]
+                      val peer1 = config.peers.get(config.next).get.asInstanceOf[Peer]
+                      val req = Request(PUT, s"/_replica/$name", JNothing,
+                        JObject(List()), JObject(List()))
+                      for {
+                        r1 <- remoteActors.get(peer0.ipcAddr) ? req
+                        r2 <- remoteActors.get(peer1.ipcAddr) ? req
+                      } yield {
+                        sender ! Response(OK,
+                          ("result" -> JString("OK"))
+                            ~ ("created" -> JBool(true))
+                            ~ ("peer" -> JInt(s.id)) ~ Nil)
+                      }
+                    } else {
+                      sender ! Response(OK,
+                        ("result" -> JString("OK"))
+                          ~ ("created" -> JBool(true))
+                          ~ ("peer" -> JInt(s.id)) ~ Nil)
+                    }
                     logger.info("created {}", name)
                   }
                   catch
@@ -418,8 +437,26 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                       }
                       else
                       {
-                        container.commit()
-                        sender ! Response(if (old.isDefined) OK else CREATED, ("result" -> JString("ok")) ~ ("rev" -> JString(value.genRev())) ~ ("peer" -> JInt(s.id)) ~ Nil)
+                        if (config.nodeCount >= 3) {
+                          val peer0 = config.peers.get(config.prev).get.asInstanceOf[Peer]
+                          val peer1 = config.peers.get(config.next).get.asInstanceOf[Peer]
+                          val req = Request(PUT, s"/_replica/$dbname/$docname",
+                            JArray(List(JValueConversion.packKey(value.id),
+                              JInt(value.seq),
+                              JValueConversion.pack(value.value),
+                              JValueConversion.packRevs(value.revisions))),
+                            JObject(List()), JObject(List()))
+                          for {
+                            r1 <- remoteActors.get(peer0.ipcAddr) ? req
+                            r2 <- remoteActors.get(peer1.ipcAddr) ? req
+                          } yield {
+                            container.commit()
+                            sender ! Response(if (old.isDefined) OK else CREATED, ("result" -> JString("ok")) ~ ("rev" -> JString(value.genRev())) ~ ("peer" -> JInt(s.id)) ~ Nil)
+                          }
+                        } else {
+                          container.commit()
+                          sender ! Response(if (old.isDefined) OK else CREATED, ("result" -> JString("ok")) ~ ("rev" -> JString(value.genRev())) ~ ("peer" -> JInt(s.id)) ~ Nil)
+                        }
                       }
                     }
                   }
@@ -483,10 +520,80 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
     }
   }
 
+  def replicaDb(request:Request, dbname:String, sender:ActorRef)(implicit baton:Option[AnyRef]) = {
+    request.method match {
+      case PUT => {
+        Databases().get(dbname, true) match {
+          case s:Some[Database] => {
+            val container = s.get
+            container.get("_replica", true) match {
+              case s:Some[BTreeMap[Key, Value]] => {
+                val m = s.get
+                val key = new ObjectKey(Map[String, Key]())
+                val value = new Document(Map("version" -> IntMember(BigInt(0))))
+                m.put(key, new Value(key, BigInt(0), false, value, List()))
+                container.commit()
+                sender ! Response(OK, "created" -> JBool(true))
+              }
+              case None => sender ! Response(PRECONDITION_FAILED,
+                ("error" -> JBool(true)) ~ ("reason" -> JString("failed_creating_table")) ~ Nil)
+            }
+          }
+          case None => sender ! Response(PRECONDITION_FAILED,
+            ("error" -> JBool(true)) ~ ("reason" -> JString("failed_creating_db")) ~ Nil)
+        }
+      }
+      case DELETE => {
+        Databases().delete(dbname)
+        sender ! Response(OK, ("result" -> JString("ok")) ~ Nil)
+      }
+      case _ => Response(METHOD_NOT_ALLOWED, JNothing)
+    }
+  }
+
   def replicaDoc(request:Request, dbname:String, docname:String, sender:ActorRef)(implicit baton:Option[AnyRef]) = {
     request.method match {
-      case GET =>
-      case PUT =>
+      case GET => {
+        Databases().get(dbname, false) match {
+          case s:Some[Database] => s.get.get("_replica", false) match {
+            case s:Some[BTreeMap[Key, Value]] => {
+              val key = StringKey(docname)
+              Option(s.get.get(key)) match {
+                case s:Some[Value] =>
+                  sender ! Response(OK, JArray(List(JValueConversion.packKey(key),
+                    JInt(s.get.seq), JValueConversion.pack(s.get.value),
+                    JValueConversion.packRevs(s.get.revisions))))
+                case None =>
+                  sender ! Response(NOT_FOUND, ("error" -> true) ~ ("reason" -> "doc_not_found"))
+              }
+            }
+            case None =>
+              sender ! Response(NOT_FOUND, ("error" -> true) ~ ("reason" -> "table_not_found"))
+          }
+          case None =>
+            sender ! Response(NOT_FOUND, ("error" -> true) ~ ("reason" -> "no_db_file"))
+        }
+      }
+      case PUT => {
+        Databases().get(dbname, false) match {
+          case s:Some[Database] => s.get.get("_replica", false) match {
+            case s:Some[BTreeMap[Key, Value]] => request.value match {
+              case JArray(List(jkey:JValue, seq:JInt, doc:JValue, revs:JArray)) => {
+                val key = JValueConversion.unpackKey(jkey)
+                val value = Value(key, seq.values, doc, JValueConversion.unpackRevs(revs))
+                s.get.put(key, value)
+                sender ! Response(OK, JNothing)
+              }
+              case _ =>
+                sender ! Response(BAD_REQUEST, ("error" -> true) ~ ("reason" -> "bad_value"))
+            }
+            case None =>
+              sender ! Response(NOT_FOUND, ("error" -> true) ~ ("reason" -> "table_not_found"))
+          }
+          case None =>
+            sender ! Response(NOT_FOUND, ("error" -> true) ~ ("reason" -> "no_db_file"))
+        }
+      }
       case DELETE =>
       case _ => sender ! Response(METHOD_NOT_ALLOWED, JNothing)
     }

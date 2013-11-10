@@ -30,6 +30,7 @@ trait ClusterConfig
 {
   def n:Int
   def i:Int
+  def me:Int
 
   /**
    * A list of node numbers mapped to members (either self,
@@ -38,4 +39,7 @@ trait ClusterConfig
   def peers:Map[Int, Member]
 
   def nodeCount:Int = { (1 << i) + n }
+
+  def prev = if (me == 0) nodeCount - 1 else (me - 1) % nodeCount
+  def next = (me + 1) % nodeCount
 }

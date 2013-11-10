@@ -21,7 +21,7 @@ import net.liftweb.json.JsonAST._
 import collection.convert.{WrapAsScala, WrapAsJava}
 import java.math.BigInteger
 import scala._
-import collection.mutable
+import scala.collection.mutable
 import collection.mutable.ArrayBuffer
 import net.liftweb.json.JsonAST.JDouble
 import net.liftweb.json.JsonAST.JBool
@@ -78,6 +78,12 @@ object JValueConversion
     }
   }
 
+  def unpackDoc(value:JObject):Document = {
+    new Document(value.obj.map {
+      f => (f.name -> unpackValue(f.value))
+    }.toMap)
+  }
+
   def pack(value:DocumentMember):JValue = value match {
     case NullMember => JNull
     case BoolMember(false) => JBool(false)
@@ -89,6 +95,10 @@ object JValueConversion
     case m:ObjectMember => JObject(m.value.map(e => JField(e._1, pack(e._2))).toList)
   }
 
+  def pack(doc:Document):JValue = {
+    JObject(doc.value.map { e => JField(e._1, pack(e._2))}.toList)
+  }
+
   def packKey(key:Key):JValue = key match {
     case NullKey => JNull
     case BoolKey(false) => JBool(false)
@@ -98,5 +108,16 @@ object JValueConversion
     case s:StringKey => JString(s.value)
     case i:ArrayKey => JArray(i.value.map(packKey).toList)
     case o:ObjectKey => JObject(o.value.map(e => JField(e._1, packKey(e._2))).toList)
+  }
+
+  def packRevs(list:List[Revision]):JArray = {
+    JArray(list.map {rev => JArray(List(JInt(rev.seq), JString(rev.hash)))})
+  }
+
+  def unpackRevs(list:JArray):List[Revision] = {
+    list.arr.map {
+      case JArray(List(seq: JInt, hash: JString)) => new Revision(seq.values, hash.values)
+      case _ => throw new IllegalArgumentException
+    }
   }
 }
