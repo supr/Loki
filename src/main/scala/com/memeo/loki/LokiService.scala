@@ -38,6 +38,8 @@ import com.memeo.loki.Method._
 import com.memeo.loki.Status._
 import com.google.common.cache.{LoadingCache, CacheLoader, CacheBuilder}
 
+import Util.formatDuration
+
 class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
 {
   val logger = Logging(context.system, classOf[LokiService])
@@ -59,6 +61,8 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
 
   def receive = {
     case request:Request => {
+      implicit val baton:Option[AnyRef] = request.baton
+      logger.info("request baton: {}", baton)
       try {
         request.name.split('/').toList.filter(p => p.length > 0).map(e => URLDecoder.decode(e, "UTF-8")) match {
 
@@ -66,7 +70,10 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
           case List() => request.method match {
             case GET => {
               val s:Self = config.peers.values.find(m => m.isInstanceOf[Self]).get.asInstanceOf[Self]
-              sender ! Response(OK, ("version" -> JString("0.0.1-SNAPSOT")) ~ ("peer" -> JInt(s.id)) ~ ("n" -> JInt(config.n)) ~ ("i" -> JInt(config.i)) ~ Nil, JObject(List()))
+              sender ! Response(OK, ("version" -> JString("0.0.1-SNAPSOT"))
+                ~ ("peer" -> JInt(s.id))
+                ~ ("n" -> JInt(config.n))
+                ~ ("i" -> JInt(config.i)) ~ Nil)
             }
             case _ => sender ! Response(METHOD_NOT_ALLOWED, JNothing, JObject(List()))
           }
@@ -79,7 +86,9 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
               val result = JObject(Profiling.ops.map((e) => {
                 JField(e._1, ("count" -> JInt(e._2._1))
                   ~ ("total" -> JInt(e._2._2.toNanos))
-                  ~ ("avg" -> JString((e._2._2 / e._2._1).toString))
+                  ~ ("avg" -> JString(formatDuration(e._2._2 / e._2._1)))
+                  ~ ("min" -> JString(formatDuration(e._2._4)))
+                  ~ ("max" -> JString(formatDuration(e._2._3)))
                   ~ Nil)
               }).toList)
               sender ! Response(OK, result)
@@ -103,23 +112,29 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
           case _ => sender ! Response(NOT_FOUND,
                                       ("result" -> JString("error")) ~ ("reason" -> JString("not found")) ~ Nil,
                                       JObject(List()))
+
+          case List("_replica", dbname:String, docname:String) =>
+            replicaDoc(request, dbname, docname, sender)
         }
       } catch {
         case e:Exception => {
           logger.warning("exception handling request {}", e)
           e.printStackTrace()
-          sender ! Response(INTERNAL_SERVER_ERROR, ("result" -> JString("error")) ~ ("reason" -> JString(e.toString)) ~ Nil, JObject(List()))
+          sender ! Response(INTERNAL_SERVER_ERROR,
+            ("result" -> JString("error")) ~ ("reason" -> JString(e.toString)) ~ Nil)
         }
         case e:IOError => {
           logger.warning("error handling request {}", e)
           e.printStackTrace()
-          sender ! Response(INTERNAL_SERVER_ERROR, ("result" -> JString("error")) ~ ("reason" -> JString(e.toString)) ~ Nil, JObject(List()))
+          sender ! Response(INTERNAL_SERVER_ERROR,
+            ("result" -> JString("error")) ~ ("reason" -> JString(e.toString)) ~ Nil,
+            JObject(List()))
         }
       }
     }
   }
 
-  def allDbs(request:Request, sender:ActorRef) = {
+  def allDbs(request:Request, sender:ActorRef)(implicit baton:Option[AnyRef]) = {
     request.method match {
       case GET => {
         logger.debug("params: {}", request.params)
@@ -162,34 +177,36 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
           }
         } pipeTo sender
       }
-      case _ => sender ! Response(METHOD_NOT_ALLOWED, JNothing, JObject(List()))
+      case _ => sender ! Response(METHOD_NOT_ALLOWED, JNothing)
     }
   }
 
-  def compact(request:Request, name:String, sender:ActorRef) = {
+  def compact(request:Request, name:String, sender:ActorRef)(implicit baton:Option[AnyRef]) = {
     config.peers(Lookup.hash(name, config.n, config.i)) match {
       case s:Self => {
         request.method match {
           case POST => {
             Databases().get(name, false) match {
               case None =>
-                sender ! Response(NOT_FOUND, ("result" -> JString("error")) ~ ("reason" -> JString("no_db_file")) ~ Nil)
+                sender ! Response(NOT_FOUND,
+                  ("result" -> JString("error")) ~ ("reason" -> JString("no_db_file")) ~ Nil)
               case m:Some[Database] => {
                 m.get.compact()
                 sender ! Response(OK, "ok" -> JBool(true))
               }
             }
           }
-          case _ => sender ! Response(METHOD_NOT_ALLOWED, ("result" -> JString("error")) ~ ("reason" -> JString("method_not_supported")) ~ Nil)
+          case _ => sender ! Response(METHOD_NOT_ALLOWED,
+            ("result" -> JString("error")) ~ ("reason" -> JString("method_not_supported")) ~ Nil)
         }
       }
       case p:Peer => {
-        remoteActors.get(p.ipcAddr) ? request pipeTo sender
+        remoteActors.get(p.ipcAddr) ? request map { r => Response(r, baton) } pipeTo sender
       }
     }
   }
 
-  def database(request:Request, name:String, sender:ActorRef) = {
+  def database(request:Request, name:String, sender:ActorRef)(implicit baton:Option[AnyRef]) = {
     config.peers(Lookup.hash(name, config.n, config.i)) match {
       case s:Self => {
         request.method match {
@@ -197,7 +214,8 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
           case GET => {
             Databases().snapshot(name) match {
               case None =>
-                sender ! Response(NOT_FOUND, ("result" -> JString("error")) ~ ("reason" -> JString("no_db_file")) ~ Nil, JObject(List()))
+                sender ! Response(NOT_FOUND,
+                  ("result" -> JString("error")) ~ ("reason" -> JString("no_db_file")) ~ Nil)
               case d:Some[Database] => {
                 val container = d.get
                 container.get("_main", false) match {
@@ -208,9 +226,10 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                       ~ ("disk_size" -> JInt(new File(dbDir, name.replace("/", ":")).length()))
                       ~ ("doc_count" -> JInt(db.takeWhile(e => comp.compare(e._1, ObjectKey(Map())) < 0).size))
                       ~ ("peer" -> JInt(s.id))
-                      ~ Nil, JObject(List()))
+                      ~ Nil)
                   }
-                  case None => sender ! Response(NOT_FOUND, ("result" -> JString("error")) ~ ("reason" -> JString("table_not_found")) ~ Nil, JObject(List()))
+                  case None => sender ! Response(NOT_FOUND,
+                    ("result" -> JString("error")) ~ ("reason" -> JString("table_not_found")) ~ Nil)
                 }
               }
             }
@@ -218,15 +237,15 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
           case PUT => {
             if (!name.matches("[a-z][-a-z0-9_\\$()+/]*"))
             {
-              sender ! Response(BAD_REQUEST, ("result" -> JString("error")) ~ ("reason" -> JString("invalid_db_name")) ~ Nil)
+              sender ! Response(BAD_REQUEST,
+                ("result" -> JString("error")) ~ ("reason" -> JString("invalid_db_name")) ~ Nil)
             }
             else
             {
               Databases().get(name, true) match {
                 case None =>
                   sender ! Response(PRECONDITION_FAILED,
-                    ("result" -> JString("error")) ~ ("reason" -> JString("db_exists")) ~ Nil,
-                    JObject(List()))
+                    ("result" -> JString("error")) ~ ("reason" -> JString("db_exists")) ~ Nil)
                 case d:Some[Database] => {
                   val container = d.get
                   try
@@ -236,15 +255,17 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                     val value = new Document(Map("version" -> IntMember(BigInt(0))))
                     m.put(key, new Value(key, BigInt(0), false, value, List()))
                     container.commit()
-                    sender ! Response(OK, ("result" -> JString("OK")) ~ ("created" -> JBool(true)) ~ ("peer" -> JInt(s.id)) ~ Nil, JObject(List()))
+                    sender ! Response(OK,
+                      ("result" -> JString("OK"))
+                        ~ ("created" -> JBool(true))
+                        ~ ("peer" -> JInt(s.id)) ~ Nil)
                     logger.info("created {}", name)
                   }
                   catch
                     {
                       case iae:IllegalArgumentException => {
                         sender ! Response(PRECONDITION_FAILED,
-                          ("result" -> JString("error")) ~ ("reason" -> JString("db_exists")) ~ Nil,
-                          JObject(List()))
+                          ("result" -> JString("error")) ~ ("reason" -> JString("db_exists")) ~ Nil)
                     }
                   }
                 }
@@ -253,24 +274,26 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
           }
           case DELETE => {
             Databases().delete(name)
-            sender ! Response(OK, ("result" -> JString("ok")) ~ ("peer" -> JInt(s.id)) ~ Nil, JObject(List()))
+            sender ! Response(OK,
+              ("result" -> JString("ok")) ~ ("peer" -> JInt(s.id)) ~ Nil)
           }
-          case _ => sender ! Response(METHOD_NOT_ALLOWED, JNothing, JObject(List()))
+          case _ => sender ! Response(METHOD_NOT_ALLOWED, JNothing)
         }
       }
       case p:Peer => {
-        remoteActors.get(p.ipcAddr) ? request pipeTo sender
+        remoteActors.get(p.ipcAddr) ? request map {r => Response(r, baton)} pipeTo sender
       }
     }
   }
 
-  def allDocs(request:Request, dbname:String, sender:ActorRef) = {
+  def allDocs(request:Request, dbname:String, sender:ActorRef)(implicit baton:Option[AnyRef]) = {
     config.peers(Lookup.hash(dbname, config.n, config.i)) match {
       case s:Self => request.method match {
         case GET => {
           Databases().snapshot(dbname) match {
             case None =>
-              sender ! Response(NOT_FOUND, ("result" -> JString("error")) ~ ("reason" -> JString("no_db_file")) ~ Nil)
+              sender ! Response(NOT_FOUND,
+                ("result" -> JString("error")) ~ ("reason" -> JString("no_db_file")) ~ Nil)
             case d:Some[Database] =>
               val container = d.get
               val startkey = request.params \ "startkey" match {
@@ -284,7 +307,8 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                 case _ => throw new IllegalArgumentException("invalid endkey")
               }
               container.get("_main", false) match {
-                case None => sender ! Response(NOT_FOUND, ("result" -> JString("error")) ~ ("reason" -> JString("table_not_found")) ~ Nil)
+                case None => sender ! Response(NOT_FOUND,
+                  ("result" -> JString("error")) ~ ("reason" -> JString("table_not_found")) ~ Nil)
                 case m:Some[BTreeMap[Key, Value]] => {
                   val db = WrapAsScala.mapAsScalaMap(m.get.subMap(startkey, endkey))
                   val limit:Int = request.params \ "limit" match {
@@ -320,12 +344,12 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
         case _ => sender ! Response(METHOD_NOT_ALLOWED, JNothing)
       }
       case p:Peer => {
-        remoteActors.get(p.ipcAddr) ? request pipeTo sender
+        remoteActors.get(p.ipcAddr) ? request map {r => Response(r, baton)} pipeTo sender
       }
     }
   }
 
-  def doc(request:Request, dbname:String, docname:String, sender:ActorRef) = {
+  def doc(request:Request, dbname:String, docname:String, sender:ActorRef)(implicit baton:Option[AnyRef]) = {
     config.peers(Lookup.hash(dbname, config.n, config.i)) match {
       case s:Self => {
         request.method match {
@@ -449,13 +473,22 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
               }
             }
           }
-          case _ => sender ! Response(METHOD_NOT_ALLOWED, JNothing, JObject(List()))
+          case _ => sender ! Response(METHOD_NOT_ALLOWED, JNothing)
         }
       }
       case p:Peer => {
         logger.info("forwarding op {}/{} to {}", dbname, docname, p.ipcAddr)
-        remoteActors.get(p.ipcAddr) ? request pipeTo sender
+        remoteActors.get(p.ipcAddr) ? request map {r=>Response(r, baton)} pipeTo sender
       }
+    }
+  }
+
+  def replicaDoc(request:Request, dbname:String, docname:String, sender:ActorRef)(implicit baton:Option[AnyRef]) = {
+    request.method match {
+      case GET =>
+      case PUT =>
+      case DELETE =>
+      case _ => sender ! Response(METHOD_NOT_ALLOWED, JNothing)
     }
   }
 }

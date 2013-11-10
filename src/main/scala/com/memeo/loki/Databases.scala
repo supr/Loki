@@ -23,6 +23,7 @@ import collection.convert.WrapAsScala
 import com.google.common.cache.{RemovalNotification, RemovalListener, Cache, CacheBuilder}
 import java.util.concurrent.{ExecutionException, Callable}
 import akka.actor.ActorSystem
+import com.google.common.util.concurrent.UncheckedExecutionException
 
 class Database(val db:DB, val file:File, val isSnapshot:Boolean = false)(implicit val system:ActorSystem)
 {
@@ -51,7 +52,7 @@ class Database(val db:DB, val file:File, val isSnapshot:Boolean = false)(implici
               try {
                 db.createTreeMap(tableName)
                   .nodeSize(32)
-                  .valuesStoredOutsideNodes(true)
+                  .valuesOutsideNodesEnable()
                   .comparator(new KeyComparator)
                   .keySerializer(new KeySerializer)
                   .valueSerializer(new ValueSerializer)
@@ -117,7 +118,7 @@ class Databases(val dbdir: File)(implicit val system:ActorSystem)
       }))
     }
     catch {
-      case e:ExecutionException if e.getCause.isInstanceOf[NoSuchElementException] => None
+      case e:UncheckedExecutionException if e.getCause.isInstanceOf[NoSuchElementException] => None
     }
   }
 

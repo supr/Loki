@@ -22,6 +22,9 @@ The three command line parameters are *my-id*, *i*, and *n*. *i* and *n* are par
 algorithm used to balance storage throughout the cluster. For a given value of *i*, there can be 2<sup>*i*</sup>
 nodes in that cluster.
 
+You can also run a one-node cluster by running it one time, giving parameters `0 0 0`;
+or, a two-node cluster by running it twice, giving parameters `0 1 0` and `1 1 0`.
+
 ## How it works
 
 The primary class is `LokiService`, which is an Akka Actor that receives pseudo-HTTP requests (the request contents

@@ -16,9 +16,10 @@
 
 package com.memeo.loki
 
+import akka.actor.Actor
 import scala.concurrent.{future, promise}
 import scala.concurrent.duration._
-import org.glassfish.grizzly.http.server.HttpHandler
+import org.glassfish.grizzly.http.server.{HttpServer, HttpHandler}
 import akka.actor.{ActorSystem, ActorRef}
 import akka.pattern.ask
 import net.liftweb.json.JsonAST._
@@ -35,16 +36,52 @@ import org.glassfish.grizzly.{ReadHandler, http}
 import java.io.{ByteArrayInputStream, InputStreamReader, ByteArrayOutputStream}
 import net.liftweb.json.JsonParser
 import scala.util.{Try, Success, Failure}
-import scala.tools.scalap.scalax.rules.Choice
 
-class GrizzlyAdapter(val serviceActor:ActorRef)(implicit val context:ExecutionContext, implicit val system:ActorSystem) extends HttpHandler
+class GrizzlyAdapter(val serviceActor:ActorRef) extends HttpHandler with Actor
 {
+  import ExecutionContext.Implicits.global
+
   val utf8 = Charset.forName("UTF-8")
-  val logger = Logging(system, classOf[GrizzlyAdapter])
+  val logger = Logging(context.system, classOf[GrizzlyAdapter])
   implicit val timeout = Timeout(30 seconds)
 
-  override def service(request: org.glassfish.grizzly.http.server.Request,
-                       response: org.glassfish.grizzly.http.server.Response):Unit = {
+  type HttpRequest = org.glassfish.grizzly.http.server.Request
+  type HttpResponse = org.glassfish.grizzly.http.server.Response
+
+  def receive = {
+    case server:HttpServer => {
+      server.getServerConfiguration.addHttpHandler(this, "/")
+      sender ! "OK"
+    }
+
+    case resp:Response => {
+      logger.debug("service produced response {}", resp)
+      resp.baton match {
+        case s:Some[AnyRef] if s.get.isInstanceOf[HttpResponse] => {
+          val response = s.get.asInstanceOf[HttpResponse]
+          response.setStatus(resp.status.id)
+          resp.headers.values.foreach {
+            e => response.setHeader(e._1, e._2.toString)
+          }
+          resp.value match {
+            case JNothing => Unit
+            case v:JValue => {
+              val json = compact(render(v)).getBytes(utf8)
+              response.setContentType("application/json")
+              response.setContentLength(json.length)
+              response.getNIOOutputStream.asInstanceOf[BinaryNIOOutputSink].write(new ByteBufferWrapper(ByteBuffer.wrap(json)))
+            }
+          }
+          response.resume()
+        }
+        case _ => {
+          logger.warning("expecting response with HTTP response, got {}", resp.baton)
+        }
+      }
+    }
+  }
+
+  override def service(request: HttpRequest, response: HttpResponse):Unit = {
     logger.info("servicing {} {}", request.getMethod, request.getRequestURI)
     response.suspend()
     val requestPromise = promise[Try[Request]]()
@@ -80,54 +117,36 @@ class GrizzlyAdapter(val serviceActor:ActorRef)(implicit val context:ExecutionCo
               input.read(buf)
               buffer.write(buf)
             }
-            val req = Request(request, JsonParser.parse(new InputStreamReader(new ByteArrayInputStream(buffer.toByteArray))))
+            val req = Request(request, JsonParser.parse(new InputStreamReader(new ByteArrayInputStream(buffer.toByteArray))), Some(response))
             requestPromise.success(Success(req))
             logger.debug("completed request: {}", req)
           }
         })
       }
-      case _ => requestPromise.success(Success(Request(request, JNothing)))
+      case _ => requestPromise.success(Success(Request(request, JNothing, Some(response))))
     }
     for {
       result <- requestPromise.future
-      r <- {
-        logger.debug("got result:{}", result)
-        result match {
-          case succ:Success[Request] => serviceActor ? succ.get
-          case fail:Failure[Request] => future { fail.exception }
-        }
-      }
     } yield {
-      r match {
-        case resp:Response => {
-          logger.debug("service produced response {}", resp)
-          response.setStatus(resp.status.id)
-          resp.headers.values.foreach {
-            e => response.setHeader(e._1, e._2.toString)
-          }
-          resp.value match {
-            case JNothing => Unit
-            case v:JValue => {
-              val json = compact(render(v)).getBytes(utf8)
-              response.setContentType("application/json")
-              response.setContentLength(json.length)
-              response.getNIOOutputStream.asInstanceOf[BinaryNIOOutputSink].write(new ByteBufferWrapper(ByteBuffer.wrap(json)))
-            }
-          }
+      result match {
+        case req:Success[Request] => {
+          logger.info("sending request {} to service")
+          serviceActor ! req.get
         }
-        case t:Throwable => {
+        case fail:Failure[Request] => {
           response.setStatus(HttpStatus.INTERNAL_SERVER_ERROR_500)
-          val result = JObject(List(JField("error", JBool(value = true)), JField("reason", JString(t.getMessage))))
+          val result = JObject(List(JField("error", JBool(value = true)), JField("reason", JString(fail.exception.getMessage))))
           val json = compact(render(result)).getBytes(utf8)
           response.setContentType("application/json")
           response.setContentLength(json.length)
           response.getNIOOutputStream.asInstanceOf[BinaryNIOOutputSink].write(new ByteBufferWrapper(ByteBuffer.wrap(json)))
+          response.resume()
         }
         case _ => {
           response.setStatus(HttpStatus.NOT_FOUND_404)
+          response.resume()
         }
       }
-      response.resume()
     }
   }
 }

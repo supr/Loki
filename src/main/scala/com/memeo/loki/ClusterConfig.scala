@@ -36,4 +36,6 @@ trait ClusterConfig
    * or a remote peer).
    */
   def peers:Map[Int, Member]
+
+  def nodeCount:Int = { (1 << i) + n }
 }

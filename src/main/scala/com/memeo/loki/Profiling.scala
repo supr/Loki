@@ -21,11 +21,13 @@ import java.util.Date
 import concurrent.duration._
 import java.util.concurrent.TimeUnit
 
+import Util.formatDuration
+
 object Profiling
 {
   var profilingEnabled = true
   val opsMaps = new ThreadLocal[TrieMap[String, Long]]
-  val ops = new TrieMap[String, (Long, Duration)]()
+  val ops = new TrieMap[String, (Long, Duration, Duration, Duration)]()
 
   def begin(op:String) = {
     if (profilingEnabled) {
@@ -49,15 +51,19 @@ object Profiling
         if (begin.isDefined) {
           val now = System.nanoTime()
           val elapsed = Duration(now - begin.get, TimeUnit.NANOSECONDS)
-          val opSummary:(Long, Duration) = ops.get(op) match {
-            case s:Some[(Long, Duration)] => s.get
-            case None => (0, 0 millis)
+          val x:(Long, Duration, Duration, Duration) = ops.get(op) match {
+            case s:Some[(Long, Duration, Duration, Duration)] => s.get
+            case None => (0, 0 millis, 0 millis, 1 days)
           }
-          ops.put(op, (opSummary._1 + 1, opSummary._2 + elapsed))
+          val max = if (elapsed > x._3) elapsed else x._3
+          val min = if (elapsed < x._4) elapsed else x._4
+          ops.put(op, (x._1 + 1, x._2 + elapsed, max, min))
 
           val o = ops.get(op).get // we just put it, it must be there
-          printf("[PROFILING] %s finished in %s\n", op, elapsed)
-          printf("[PROFILING] %s ops total, %s total elapsed, %s average\n", o._1, o._2, o._2 / o._1)
+          printf("[PROFILING] %s finished in %s\n", op, formatDuration(elapsed))
+          printf("[PROFILING] %s ops total, %s total elapsed, %s average %s min %s max\n", o._1,
+            formatDuration(o._2), formatDuration(o._2 / o._1),
+            formatDuration(o._4), formatDuration(o._3))
         }
       }
     }
