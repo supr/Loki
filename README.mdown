@@ -1,5 +1,7 @@
 Loki, a storage system.
 
+![Loki](https://raw.github.com/csm/Loki/develop/loki.gif)
+
 Quick start:
 
     mvn clean compile scala:compile dependency:copy-dependencies
