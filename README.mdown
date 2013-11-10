@@ -33,12 +33,21 @@ A Grizzly HTTP listener handles HTTP requests, decodes the HTTP, and forwards it
 Storage is split by database, so if a request to node *A* arrives for a database stored on node *B*, node *A* forwards
 the request to the remote actor on node *B*, gets the reply from node *B*, and responds to the HTTP request.
 
+The cluster can be thought of as a linear hash table, where the key is the database name.
+When a node handles a request for database "foo", it will hash that name with MD5, then
+use that hash to compute a linear hash code, which will map to the number of the node the
+request should be forwarded to.
+
+When a document is written, it is first written to the primary database, then (as long as
+there are at least three nodes in the cluster) the write is replicated to node *n-1* and node
+*n+1*.
+
+![Loki Cluster](https://raw.github.com/csm/Loki/develop/cluster.png)
+
 ## TODO
 
 * Zookeeper-based cluster configuration.
 * Map/reduce views (probably any JVM language: JavaScript, Groovy, etc).
-* Write replication (the idea is that a write to node *n* would replicate to nodes *n-1* and *n+1*).
 * Request rerouting to replicas when the primary is offline.
 * Restoration of a primary from replicas.
 * Rebalancing of the cluster when it grows.
-* Protocol buffer interface, in addition to HTTP?
