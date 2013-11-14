@@ -74,3 +74,19 @@ enough isolation so it
 * Run the view execution in a separate JVM process (with a security manager),
     communicate to it via remote actors, stdin/stdout, etc.
 * Reimplement CouchDB's view server.
+
+### Storage Model
+
+Linear hashing produces unbalanced write loads if the node count isn't of the
+form 2<sup>i</sup>. Cluster expansion *could* simply mean doubling the size
+each time, which sounds bad, except you then consider that the time between
+expansions would also double (given the same write load).
+
+Should explore other partitioning schemes.
+
+### Serving, storing nodes.
+
+We can easily add more HTTP server nodes to the cluster, just give them a larger
+node value then the maximum node value in the cluster. You can also have more storage
+nodes than server nodes, just by walling off some of the nodes' HTTP servers. We could
+also provide an option to disable the HTTP server completely.
