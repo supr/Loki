@@ -22,10 +22,14 @@ import java.util.Comparator
 import com.sleepycat.je.{CursorConfig, LockMode, OperationStatus, DatabaseEntry}
 import com.google.common.cache.{LoadingCache, CacheLoader, CacheBuilder}
 
-class BerkeleyDBSortedMap(val db:je.Database) extends concurrent.Map[Key, Value] with SortedMap[Key, Value]
+class BerkeleyDBSortedMap(val db:je.Database,
+                          val startKey:Option[Key] = None,
+                          val endKey:Option[Key] = None)
+  extends concurrent.Map[Key, Value] with SortedMap[Key, Value]
 {
   private val keySerializer = new KeySerializer
   private val valueSerializer = new ValueSerializer
+  private val comparator = new KeyComparator
 
   private val keyCache:LoadingCache[Key, Array[Byte]] = CacheBuilder
     .newBuilder()
@@ -36,7 +40,24 @@ class BerkeleyDBSortedMap(val db:je.Database) extends concurrent.Map[Key, Value]
       }
     })
 
+
+  implicit def ordering: Ordering[Key] = {
+    Ordering.comparatorToOrdering(comparator)
+  }
+
+  def rangeImpl(from: Option[Key], until: Option[Key]): SortedMap[Key, Value] = {
+    new BerkeleyDBSortedMap(db, from, until)
+  }
+
+  private def checkRange(key:Key):Unit = {
+    if (startKey.isDefined && comparator.compare(key, startKey.get) < 0)
+      throw new IllegalArgumentException("key " + key + " is smaller than lower bound key " + startKey.get)
+    if (endKey.isDefined && comparator.compare(key, endKey.get) > 0)
+      throw new IllegalArgumentException("key " + key + " is larger than upper bound key " + endKey.get)
+  }
+
   def +=(kv: (Key, Value)): BerkeleyDBSortedMap = {
+    checkRange(kv._1)
     val kb = new DatabaseEntry(keyCache.get(kv._1))
     val txn = db.getEnvironment.beginTransaction(null, null)
     try {
@@ -53,6 +74,7 @@ class BerkeleyDBSortedMap(val db:je.Database) extends concurrent.Map[Key, Value]
   }
 
   def -=(key: Key): BerkeleyDBSortedMap = {
+    checkRange(key)
     val kb = new DatabaseEntry(keyCache.get(key))
     val txn = db.getEnvironment.beginTransaction(null, null)
     try {
@@ -71,16 +93,14 @@ class BerkeleyDBSortedMap(val db:je.Database) extends concurrent.Map[Key, Value]
   }
 
   def get(key: Key): Option[Value] = {
+    checkRange(key)
     val kb = new DatabaseEntry(keyCache.get(key))
     val txn = db.getEnvironment.beginTransaction(null, null)
     try {
       val value = new DatabaseEntry()
       db.get(txn, kb, value, LockMode.READ_UNCOMMITTED) match {
         case OperationStatus.SUCCESS => {
-          (value.getOffset, value.getSize) match {
-            case (0, value.getData.length) => Some(valueSerializer.fromBinary(value.getData))
-            case (i, j) => Some(valueSerializer.fromBinary(value.getData.slice(i, i+j)))
-          }
+          Some(valueSerializer.fromBinary(value))
         }
         case OperationStatus.NOTFOUND => None
         case c:OperationStatus => throw new IllegalArgumentException("got unexpected result code: " + c)
@@ -93,17 +113,25 @@ class BerkeleyDBSortedMap(val db:je.Database) extends concurrent.Map[Key, Value]
   def iterator: Iterator[(Key, Value)] = {
     val cursor = db.openCursor(null, CursorConfig.READ_UNCOMMITTED)
     return new Iterator[(Key, Value)] {
-      val currentKey = new DatabaseEntry()
+      val currentKey = startKey match {
+        case s:Some[Key] => new DatabaseEntry(keyCache.get(s.get))
+        case None => new DatabaseEntry()
+      }
       val currentValue = new DatabaseEntry()
       var currentStatus = cursor.getNext(currentKey, currentValue, LockMode.READ_UNCOMMITTED)
 
-      def hasNext: Boolean = currentStatus == OperationStatus.SUCCESS
+      def hasNext: Boolean =
+        (currentStatus == OperationStatus.SUCCESS
+          && (!endKey.isDefined
+              || comparator.compare(keySerializer.fromBinary(currentKey), endKey.get) > 0))
 
       def next(): (Key, Value) = {
-        if (currentStatus != OperationStatus.SUCCESS)
+        if (currentStatus != OperationStatus.SUCCESS
+            || (endKey.isDefined
+                && comparator.compare(keySerializer.fromBinary(currentKey), endKey.get) > 0))
           throw new NoSuchElementException
-        val key = keySerializer.fromBinary(currentKey.getData.slice(currentKey.getOffset, currentKey.getOffset + currentKey.getSize))
-        val value = valueSerializer.fromBinary(currentValue.getData.slice(currentValue.getOffset, currentValue.getOffset + currentValue.getSize))
+        val key = keySerializer.fromBinary(currentKey)
+        val value = valueSerializer.fromBinary(currentValue)
         currentStatus = cursor.getNext(currentKey, currentValue, LockMode.READ_UNCOMMITTED)
         (key, value)
       }
@@ -118,10 +146,7 @@ class BerkeleyDBSortedMap(val db:je.Database) extends concurrent.Map[Key, Value]
       db.get(txn, kb, value, LockMode.RMW) match {
         case OperationStatus.SUCCESS => {
           txn.abort()
-          (value.getOffset, value.getSize) match {
-            case (0, value.getData.length) => Some(valueSerializer.fromBinary(value.getData))
-            case (i, j) => Some(valueSerializer.fromBinary(value.getData.slice(i, i+j)))
-          }
+          Some(valueSerializer.fromBinary(value))
         }
         case OperationStatus.NOTFOUND => {
           db.put(txn, kb, new DatabaseEntry(valueSerializer.toBinary(v)))
@@ -167,12 +192,9 @@ class BerkeleyDBSortedMap(val db:je.Database) extends concurrent.Map[Key, Value]
       val value = new DatabaseEntry()
       db.get(txn, kb, value, LockMode.RMW) match {
         case OperationStatus.SUCCESS => {
-          val v = (value.getOffset, value.getSize) match {
-            case (0, value.getData.length) => valueSerializer.fromBinary(value.getData)
-            case (i, j) => valueSerializer.fromBinary(value.getData.slice(i, i+j))
-          }
+          val v = valueSerializer.fromBinary(value)
           if (oldvalue.equals(v)) {
-            db.put(txn, kb, new DatabaseEntry(valueSerializer.toBinary(v)))
+            db.put(txn, kb, new DatabaseEntry(valueSerializer.toBinary(newvalue)))
             txn.commit()
             true
           } else {
@@ -181,7 +203,7 @@ class BerkeleyDBSortedMap(val db:je.Database) extends concurrent.Map[Key, Value]
           }
         }
         case OperationStatus.NOTFOUND => {
-          db.put(txn, kb, new DatabaseEntry(valueSerializer.toBinary(v)))
+          db.put(txn, kb, new DatabaseEntry(valueSerializer.toBinary(newvalue)))
           txn.commit()
           true
         }
@@ -204,10 +226,7 @@ class BerkeleyDBSortedMap(val db:je.Database) extends concurrent.Map[Key, Value]
         case OperationStatus.SUCCESS => {
           db.put(txn, kb, new DatabaseEntry(valueSerializer.toBinary(v)))
           txn.commit()
-          (value.getOffset, value.getSize) match {
-            case (0, value.getData.length) => Some(valueSerializer.fromBinary(value.getData))
-            case (i, j) => Some(valueSerializer.fromBinary(value.getData.slice(i, i+j)))
-          }
+          Some(valueSerializer.fromBinary(value))
         }
         case OperationStatus.NOTFOUND => {
           db.put(txn, kb, new DatabaseEntry(valueSerializer.toBinary(v)))
