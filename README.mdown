@@ -51,3 +51,26 @@ there are at least three nodes in the cluster) the write is replicated to node *
 * Request rerouting to replicas when the primary is offline.
 * Restoration of a primary from replicas.
 * Rebalancing of the cluster when it grows.
+
+## Implementation Ideas/Notes
+
+### Disk Storage
+
+Trying out a few things; we want it to support concurrent access, sorted
+primary key iteration, sub-maps. Should be stable, fast, and highly durable.
+
+* [MapDB](http://www.mapdb.org/). A newer Java-only database; provides b-tree-backed
+    implementation of a concurrent, navigable map. Looks good, still very new.
+* [BerkeleyDB](http://www.oracle.com/technetwork/products/berkeleydb/overview/index.html).
+* Reimplement [CouchDB](http://www.couchdb.org/) style storage (append-only b-trees) in Scala.
+
+### View Server
+
+We need a way to execute map and reduce functions (written in a JVM language,
+JavaScript, Groovy first; then Python, Ruby, maybe Scala and Java). It needs
+enough isolation so it
+
+* Wrap the view execution in a [sandbox](https://github.com/csm/java-sandbox).
+* Run the view execution in a separate JVM process (with a security manager),
+    communicate to it via remote actors, stdin/stdout, etc.
+* Reimplement CouchDB's view server.
