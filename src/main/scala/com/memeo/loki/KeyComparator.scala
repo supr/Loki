@@ -30,6 +30,14 @@ object KeyComparator
   val collator:Collator = new RuleBasedCollator("<\ufffe")
 }
 
+class KeyComparatorAdapter extends Comparator[Array[Byte]] with Serializable
+{
+  val serial = new KeySerializer
+  var comp = new KeyComparator
+
+  def compare(o1: Array[Byte], o2: Array[Byte]): Int = comp.compare(serial.fromBinary(o1), serial.fromBinary(o2))
+}
+
 /**
  * JSON value collation, as is done in http://wiki.apache.org/couchdb/View_collation
  */

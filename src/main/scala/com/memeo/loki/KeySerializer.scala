@@ -26,6 +26,8 @@ import collection.mutable
 import akka.event.Logging
 import akka.actor.ActorSystem
 import akka.serialization
+import com.sleepycat.je.DatabaseEntry
+import com.sleepycat.bind.{EntryBinding, EntityBinding}
 
 object KeySerializer
 {
@@ -218,4 +220,18 @@ class KeySerializer extends BTreeKeySerializer[Key] with Serializable
       case o:AnyRef => throw new IOException("expected to read Key, got " + o)
     }
   }
+
+  def fromBinary(entry: DatabaseEntry): Key = {
+    (entry.getOffset, entry.getSize) match {
+      case (offset, length) if offset == 0 && length == entry.getData.length => fromBinary(entry.getData)
+      case (offset, length) => fromBinary(entry.getData.slice(offset, offset + length))
+    }
+  }
+}
+
+class KeyBinding extends EntryBinding[Key]
+{
+  val serial = new KeySerializer
+  def objectToEntry(key: Key, entry: DatabaseEntry) = entry.setData(serial.toBinary(key))
+  def entryToObject(entry: DatabaseEntry): Key = serial.fromBinary(entry)
 }

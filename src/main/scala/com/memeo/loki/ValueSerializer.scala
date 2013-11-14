@@ -31,6 +31,8 @@ import com.memeo.loki.DoubleMember
 import com.memeo.loki.ArrayMember
 import scala.Serializable
 import com.memeo.loki.IntMember
+import com.sleepycat.je.DatabaseEntry
+import com.sleepycat.bind.{EntryBinding, EntityBinding}
 
 object ValueSerializer
 {
@@ -270,4 +272,18 @@ class ValueSerializer extends Serializer[Value] with Serializable
   def fromBinary(bytes: Array[Byte]): Value = {
     deserialize(new DataInputStream(new ByteArrayInputStream(bytes)), bytes.length)
   }
+
+  def fromBinary(entry: DatabaseEntry): Value = {
+    (entry.getOffset, entry.getSize) match {
+      case (o, l) if o == 0 && l == entry.getData.length => fromBinary(entry.getData)
+      case (o, l) => fromBinary(entry.getData.slice(o, l + o))
+    }
+  }
+}
+
+class ValueBinding extends EntryBinding[Value]
+{
+  val serial = new ValueSerializer
+  def objectToEntry(value: Value, entry: DatabaseEntry) = entry.setData(serial.toBinary(value))
+  def entryToObject(entry: DatabaseEntry): Value = serial.fromBinary(entry)
 }

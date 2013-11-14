@@ -19,7 +19,6 @@ package com.memeo.loki
 import net.liftweb.json.JsonAST._
 import net.liftweb.json.JsonDSL._
 import net.liftweb.json.DefaultFormats
-import org.mapdb.{BTreeMap, DB}
 import akka.actor.{ActorRef, Actor}
 import akka.pattern.{ask, pipe}
 import java.io.{IOError, FilenameFilter, File}
@@ -39,6 +38,7 @@ import com.memeo.loki.Status._
 import com.google.common.cache.{LoadingCache, CacheLoader, CacheBuilder}
 
 import Util.formatDuration
+import com.sleepycat.collections.StoredSortedMap
 
 class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
 {
@@ -222,7 +222,7 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
               case d:Some[Database] => {
                 val container = d.get
                 container.get("_main", false) match {
-                  case m:Some[BTreeMap[Key, Value]] => {
+                  case m:Some[StoredSortedMap[Key, Value]] => {
                     val db = WrapAsScala.mapAsScalaMap(m.get)
                     val comp = new KeyComparator()
                     sender ! Response(OK, ("db_name" -> JString(name))
@@ -328,7 +328,7 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
               container.get("_main", false) match {
                 case None => sender ! Response(NOT_FOUND,
                   ("result" -> JString("error")) ~ ("reason" -> JString("table_not_found")) ~ Nil)
-                case m:Some[BTreeMap[Key, Value]] => {
+                case m:Some[StoredSortedMap[Key, Value]] => {
                   val db = WrapAsScala.mapAsScalaMap(m.get.subMap(startkey, endkey))
                   val limit:Int = request.params \ "limit" match {
                     case JNull|JNothing => Integer.MAX_VALUE
@@ -383,7 +383,7 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                 container.get("_main", false) match {
                   case None =>
                     sender ! Response(NOT_FOUND, ("result" -> JString("error")) ~ ("reason" -> JString("table_not_found")) ~ Nil)
-                  case m:Some[BTreeMap[Key, Value]] => {
+                  case m:Some[StoredSortedMap[Key, Value]] => {
                     val db = m.get
                     db.get(StringKey(docname)) match {
                       case null =>
@@ -409,7 +409,7 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                 container.get("_main", false) match {
                   case None =>
                     sender ! Response(NOT_FOUND, ("result" -> JString("error")) ~ ("reason" -> JString("table_not_found")) ~ Nil)
-                  case m:Some[BTreeMap[Key, Value]] => {
+                  case m:Some[StoredSortedMap[Key, Value]] => {
                     val docid = new StringKey(docname)
                     val db = m.get
                     val old = Option(db.get(docid))
@@ -474,7 +474,7 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                 container.get("_main", false) match {
                   case None =>
                     sender ! Response(NOT_FOUND, ("result" -> JString("error")) ~ ("reason" -> JString("table_not_found")) ~ Nil)
-                  case m:Some[BTreeMap[Key, Value]] => {
+                  case m:Some[StoredSortedMap[Key, Value]] => {
                     val docid = new StringKey(docname)
                     val db = m.get
                     val old = db.get(docid)
@@ -527,7 +527,7 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
           case s:Some[Database] => {
             val container = s.get
             container.get("_replica", true) match {
-              case s:Some[BTreeMap[Key, Value]] => {
+              case s:Some[StoredSortedMap[Key, Value]] => {
                 val m = s.get
                 val key = new ObjectKey(Map[String, Key]())
                 val value = new Document(Map("version" -> IntMember(BigInt(0))))
@@ -556,7 +556,7 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
       case GET => {
         Databases().get(dbname, false) match {
           case s:Some[Database] => s.get.get("_replica", false) match {
-            case s:Some[BTreeMap[Key, Value]] => {
+            case s:Some[StoredSortedMap[Key, Value]] => {
               val key = StringKey(docname)
               Option(s.get.get(key)) match {
                 case s:Some[Value] =>
@@ -577,7 +577,7 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
       case PUT => {
         Databases().get(dbname, false) match {
           case s:Some[Database] => s.get.get("_replica", false) match {
-            case s:Some[BTreeMap[Key, Value]] => request.value match {
+            case s:Some[StoredSortedMap[Key, Value]] => request.value match {
               case JArray(List(jkey:JValue, seq:JInt, doc:JValue, revs:JArray)) => {
                 val key = JValueConversion.unpackKey(jkey)
                 val value = Value(key, seq.values, doc, JValueConversion.unpackRevs(revs))

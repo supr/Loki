@@ -24,44 +24,30 @@ import com.google.common.cache.{RemovalNotification, RemovalListener, Cache, Cac
 import java.util.concurrent.{ExecutionException, Callable}
 import akka.actor.ActorSystem
 import com.google.common.util.concurrent.UncheckedExecutionException
+import java.util
+import com.sleepycat.collections.StoredSortedMap
+import com.sleepycat.je
+import com.sleepycat.je.{DatabaseConfig, Environment, EnvironmentConfig}
 
-class Database(val db:DB, val file:File, val isSnapshot:Boolean = false)(implicit val system:ActorSystem)
+class Database(val env:Environment, val name:String)(implicit val system:ActorSystem)
 {
-  private val cache:Cache[String, BTreeMap[Key, Value]] = CacheBuilder
+  private val cache:Cache[String, StoredSortedMap[Key, Value]] = CacheBuilder
     .newBuilder()
     .concurrencyLevel(Runtime.getRuntime.availableProcessors())
     .softValues()
     .maximumSize(32)
-    .removalListener(new RemovalListener[String, BTreeMap[Key, Value]] {
-      def onRemoval(notification: RemovalNotification[String, BTreeMap[Key, Value]]) = {
-        db.commit()
-      }
-    })
     .build()
 
-  def get(tableName:String, create:Boolean = true):Option[BTreeMap[Key, Value]] = {
-    try{
-      Some(cache.get(tableName, new Callable[BTreeMap[Key, Value]]() {
-        override def call():BTreeMap[Key, Value] = {
-          try {
-            db.getTreeMap[Key, Value](tableName)
-          }
-          catch {
-            case e:NoSuchElementException if create => {
-              Profiling.begin("create_new_table")
-              try {
-                db.createTreeMap(tableName)
-                  .nodeSize(32)
-                  .valuesOutsideNodesEnable()
-                  .comparator(new KeyComparator)
-                  .keySerializer(new KeySerializer)
-                  .valueSerializer(new ValueSerializer)
-                  .make[Key, Value]()
-              } finally {
-                Profiling.end("create_new_table")
-              }
-            }
-          }
+  def get(tableName:String, create:Boolean = true):Option[StoredSortedMap[Key, Value]] = {
+    try
+    {
+      Some(cache.get(tableName, new Callable[StoredSortedMap[Key, Value]]() {
+        override def call():StoredSortedMap[Key, Value] = {
+          val config = new DatabaseConfig()
+          config.setAllowCreate(create)
+          config.setBtreeComparator(new KeyComparatorAdapter)
+          new StoredSortedMap(env.openDatabase(null, tableName, config),
+            new KeyBinding, new ValueBinding, true)
         }
       }))
     }
@@ -71,27 +57,23 @@ class Database(val db:DB, val file:File, val isSnapshot:Boolean = false)(implici
   }
 
   def snapshot():Database = {
-    new Database(db.snapshot(), file, true)
+    this
   }
 
-  def compact():Unit = db.compact()
+  def compact():Unit = Unit
   def commit():Unit = {
     Profiling.begin("db_commit")
     try {
-      db.commit()
+      env.sync()
     } finally {
       Profiling.end("db_commit")
     }
   }
-  def close():Unit = db.close()
-  def rollback():Unit = db.rollback()
+  def close():Unit = env.close()
+  def rollback():Unit = Unit
 
   def delete():Unit = {
-    db.close()
-    val dir = file.getParentFile
-    dir.listFiles(new FilenameFilter {
-      def accept(dir: File, name: String): Boolean = name.startsWith(file.getName)
-    }).foreach(f => f.delete())
+    env.removeDatabase(null, name)
   }
 }
 
@@ -101,16 +83,25 @@ class Databases(val dbdir: File)(implicit val system:ActorSystem)
 
   def get(name: String, create: Boolean = true): Option[Database] = {
     try {
-      Some(dbCache.get(name, new Callable[Database]() {
+      Some(dbCache.get(name, new Callable[Database]()
+      {
         override def call():Database = {
-          val f = new File(dbdir, name.replace("/", ":") + ".ldb")
+          val f = new File(dbdir, name.replace("/", ":"))
           if (!f.exists()) {
             if (!create)
               throw new NoSuchElementException
           }
-          Profiling.begin("create_new_db")
           try {
-            new Database(DBMaker.newFileDB(f).strictDBGet().asyncWriteDisable().make(), f)
+            Profiling.begin("create_new_db")
+            if (!f.mkdirs())
+              throw new NoSuchElementException("failed to create directory")
+            val envConfig = new EnvironmentConfig()
+            envConfig.setAllowCreate(create)
+            envConfig.setTransactional(true)
+            envConfig.setLocking(true)
+            envConfig.setSharedCache(true)
+            val env = new Environment(f, envConfig)
+            new Database(env, name)
           } finally {
             Profiling.end("create_new_db")
           }
@@ -131,10 +122,9 @@ class Databases(val dbdir: File)(implicit val system:ActorSystem)
 
   def delete(name: String): Unit = {
     dbCache.invalidate(name)
-
-    dbdir.listFiles(new FilenameFilter {
-      def accept(dir: File, name: String): Boolean = name.startsWith(name.replace("/", ":") + ".ldb")
-    }).foreach(f => f.delete())
+    val dir = new File(dbdir, name)
+    dir.listFiles().foreach(f => f.delete())
+    dir.delete()
   }
 }
 
@@ -145,14 +135,6 @@ object Databases
     .concurrencyLevel(Runtime.getRuntime.availableProcessors())
     .softValues()
     .maximumSize(1024)
-    .removalListener(new RemovalListener[String, Database] {
-      def onRemoval(notification: RemovalNotification[String, Database]) = {
-        Option(notification.getValue) match {
-          case s:Some[Database] => s.get.commit()
-          case None => Unit
-        }
-      }
-    })
     .build()
 
   def apply()(implicit dbdir: File, system:ActorSystem) = new Databases(dbdir)
