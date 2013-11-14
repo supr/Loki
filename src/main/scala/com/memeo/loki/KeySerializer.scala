@@ -25,6 +25,7 @@ import java.math.BigInteger
 import collection.mutable
 import akka.event.Logging
 import akka.actor.ActorSystem
+import akka.serialization
 
 object KeySerializer
 {
@@ -203,5 +204,18 @@ class KeySerializer extends BTreeKeySerializer[Key] with Serializable
     val ret = buf.toArray
     Profiling.end("deserialize_key")
     ret
+  }
+
+  def toBinary(o: Key): Array[Byte] = {
+    val out = new ByteArrayOutputStream()
+    serialize(new DataOutputStream(out), 0, 1, Array(o))
+    out.toByteArray
+  }
+
+  def fromBinary(bytes: Array[Byte]): Key = {
+    deserialize(new DataInputStream(new ByteArrayInputStream(bytes)), 0, 1, 1)(0) match {
+      case k:Key => k
+      case o:AnyRef => throw new IOException("expected to read Key, got " + o)
+    }
   }
 }

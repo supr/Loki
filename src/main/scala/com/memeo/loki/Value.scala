@@ -30,17 +30,78 @@ import akka.actor.ActorSystem
 sealed abstract class DocumentMember
 case object NullMember extends DocumentMember
 case class BoolMember(value:Boolean) extends DocumentMember
-case class IntMember(value:BigInt) extends DocumentMember
-case class DoubleMember(value:Double) extends DocumentMember
-case class StringMember(value:String) extends DocumentMember
+{
+  override def equals(obj: scala.Any): Boolean = {
+    obj match {
+      case b:BoolMember => value == b.value
+      case _ => false
+    }
+  }
+}
+case class IntMember(value:BigInt) extends DocumentMember {
+  override def equals(obj: scala.Any): Boolean = {
+    obj match {
+      case i:IntMember => value.equals(i.value)
+      case _ => false
+    }
+  }
+}
+case class DoubleMember(value:Double) extends DocumentMember {
+  override def equals(obj: scala.Any): Boolean = {
+    obj match {
+      case d:DoubleMember => value.equals(d.value)
+      case _ => false
+    }
+  }
+}
+case class StringMember(value:String) extends DocumentMember {
+  override def equals(obj: scala.Any): Boolean = {
+    obj match {
+      case s:StringMember => value.equals(s.value)
+      case _ => false
+    }
+  }
+}
 case class ArrayMember(value:Array[DocumentMember]) extends DocumentMember
 {
   override def toString:String = "ArrayMember(" + value.toList.toString + ")"
-}
-case class ObjectMember(value:Map[String, DocumentMember]) extends DocumentMember
 
-class Document(val value:Map[String, DocumentMember])
-class Revision(val seq:BigInt, val hash:String)
+  override def equals(obj: scala.Any): Boolean = {
+    obj match {
+      case a:ArrayMember => {
+        value.length == a.value.length && value.zip(a.value).forall(e => e._1.equals(e._2))
+      }
+      case _ => false
+    }
+  }
+}
+case class ObjectMember(value:Map[String, DocumentMember]) extends DocumentMember {
+  override def equals(obj: scala.Any): Boolean = {
+    obj match {
+      case o:ObjectMember => {
+        value.size == o.value.size && value.keys.forall(k => o.value.get(k).isDefined && value.get(k).get.equals(o.value.get(k).get))
+      }
+    }
+  }
+}
+
+class Document(val value:Map[String, DocumentMember]) {
+  override def equals(obj: scala.Any): Boolean = {
+    obj match {
+      case d:Document => value.size == d.value.size && value.keys.forall(k => d.value.contains(k) && value.get(k).get.equals(d.value.get(k).get))
+      case _ => false
+    }
+  }
+}
+
+class Revision(val seq:BigInt, val hash:String) {
+  override def equals(obj: scala.Any): Boolean = {
+    obj match {
+      case r:Revision => seq.equals(r.seq) && hash.equals(r.hash)
+      case _ => false
+    }
+  }
+}
 
 object Value
 {
@@ -91,5 +152,11 @@ class Value(val id:Key, val seq:BigInt,
 
   def genRev():String = {
     "%d-%s".format(seq, revStr())
+  }
+
+  override def equals(obj: scala.Any): Boolean = {
+    obj match {
+      case that:Value => id.eq(that.id) && seq.eq(that.seq)
+    }
   }
 }

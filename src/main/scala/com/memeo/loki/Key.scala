@@ -26,6 +26,8 @@ case class BoolKey(val value:Boolean) extends Key with Serializable
     case b:BoolKey => value == b.value
     case _ => false
   }
+
+  override def hashCode(): Int = if (value) 1 else 0
 }
 
 case class IntKey(val value:BigInt) extends Key with Serializable
@@ -36,6 +38,8 @@ case class IntKey(val value:BigInt) extends Key with Serializable
     case i:IntKey => value.equals(i.value)
     case _ => false
   }
+
+  override def hashCode(): Int = value.hashCode()
 }
 
 case class DoubleKey(val value:Double) extends Key with Serializable
@@ -46,6 +50,8 @@ case class DoubleKey(val value:Double) extends Key with Serializable
     case d:DoubleKey => value == d.value
     case _ => false
   }
+
+  override def hashCode(): Int = value.hashCode()
 }
 
 case class StringKey(val value:String) extends Key with Serializable
@@ -56,6 +62,8 @@ case class StringKey(val value:String) extends Key with Serializable
     case s:StringKey => value == s.value
     case _ => false
   }
+
+  override def hashCode(): Int = value.hashCode
 }
 
 case class ArrayKey(val value:Array[Key]) extends Key with Serializable
@@ -66,6 +74,8 @@ case class ArrayKey(val value:Array[Key]) extends Key with Serializable
     case a:ArrayKey => value.size == a.value.size && value.zip(a.value).forall(e => e._1 == e._2)
     case _ => false
   }
+
+  override def hashCode(): Int = value.foldLeft(0)((c, k) => c + k.hashCode())
 }
 
 case class ObjectKey(val value:Map[String, Key]) extends Key with Serializable
@@ -76,4 +86,6 @@ case class ObjectKey(val value:Map[String, Key]) extends Key with Serializable
     case o:ObjectKey => value.size == o.value.size && value.forall(e => o.value.contains(e._1) && o.value(e._1) == e._2)
     case _ => false
   }
+
+  override def hashCode(): Int = value.foldLeft(0)((c, e) => c + e._1.hashCode + e._2.hashCode())
 }

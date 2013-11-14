@@ -260,4 +260,14 @@ class ValueSerializer extends Serializer[Value] with Serializable
       Profiling.end("deserialize_value")
     }
   }
+
+  def toBinary(o: Value): Array[Byte] = {
+    val out = new ByteArrayOutputStream()
+    serialize(new DataOutputStream(out), o)
+    out.toByteArray
+  }
+
+  def fromBinary(bytes: Array[Byte]): Value = {
+    deserialize(new DataInputStream(new ByteArrayInputStream(bytes)), bytes.length)
+  }
 }

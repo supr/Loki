@@ -96,7 +96,6 @@ object Util
     val minutes = duration.toMinutes - (days * 24 * 60)
     val seconds = duration.toSeconds - (days * 24 * 60 * 60)
     val nanos = duration.toNanos - (days * 24 * 60 * 60 * 1000000000)
-    val buf = new StringBuilder()
     if (days > 0)
       f"$days.$hours%02d:$minutes%02d:$seconds%02d.$nanos%09d"
     else
