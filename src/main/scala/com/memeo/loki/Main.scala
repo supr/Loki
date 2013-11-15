@@ -24,6 +24,7 @@ import com.typesafe.config.ConfigFactory
 import akka.event.Logging
 import org.glassfish.grizzly.http.server.HttpServer
 import akka.util.Timeout
+import java.nio.file.Paths
 
 object Main extends App
 {
@@ -56,7 +57,7 @@ object Main extends App
   }
   implicit val system = ActorSystem("loki", ConfigFactory.parseString("akka.remote.netty.port=" + (7777 + me_)).withFallback(ConfigFactory.parseFile(new File("akka.conf")).withFallback(ConfigFactory.defaultOverrides())));
   val logger = Logging(system, getClass)
-  val service = system.actorOf(Props(new LokiService(new File("loki" + me_), new conf())), "loki")
+  val service = system.actorOf(Props(new LokiService(Paths.get("loki" + me_), new conf())), "loki")
   import scala.concurrent.ExecutionContext.Implicits.global
   val httpServer = HttpServer.createSimpleServer(null, 8080 + me_)
   val grizzlyActor = system.actorOf(Props(new GrizzlyAdapter(service)), "grizzly")

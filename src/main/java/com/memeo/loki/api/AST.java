@@ -252,6 +252,20 @@ public class AST
             super(Collections.unmodifiableMap(value));
         }
 
+        public ObjectValue(JsonAST.JObject obj)
+        {
+            super(value(obj));
+        }
+
+        private static Map<String, Value<?>> value(JsonAST.JObject obj)
+        {
+            Collection<JsonAST.JField> jFields = WrapAsJava$.MODULE$.asJavaCollection(((JsonAST.JObject) obj).obj());
+            Map<String, Value<?>> map = new LinkedHashMap<>();
+            for (JsonAST.JField jField : jFields)
+                map.put(jField.name(), of(jField.value()));
+            return map;
+        }
+
         @Override
         public JsonAST.JValue toJValue()
         {

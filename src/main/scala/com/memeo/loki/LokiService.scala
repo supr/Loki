@@ -39,13 +39,12 @@ import com.google.common.cache.{LoadingCache, CacheLoader, CacheBuilder}
 
 import Util.formatDuration
 import com.sleepycat.collections.StoredSortedMap
+import java.nio.file.Path
 
-class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
+class LokiService(val dbDir:Path, val config:ClusterConfig) extends Actor
 {
   val logger = Logging(context.system, classOf[LokiService])
-  def listDbs():List[String] = dbDir.list(new FilenameFilter {
-    def accept(dir: File, name: String): Boolean = name.endsWith(".ldb")
-  }).map(name => name.substring(0, name.length - 4).replace(":", "/")).toList
+  def listDbs():List[String] = Databases().alldbs
 
   import context.dispatcher
   implicit val timeout = Timeout(30 seconds)
@@ -175,7 +174,7 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
           }
         })) map {
           ll => {
-            val dblist = JArray((for (l <- ll; e <- l) yield JString(e)).toList)
+            val dblist = JArray((for (l <- ll; e <- l) yield JString(e)).toList.sortBy(s => s.values))
             Response(OK, dblist, JObject(List()))
           }
         } pipeTo sender
@@ -226,7 +225,7 @@ class LokiService(val dbDir:File, val config:ClusterConfig) extends Actor
                     val db = WrapAsScala.mapAsScalaMap(m.get)
                     val comp = new KeyComparator()
                     sender ! Response(OK, ("db_name" -> JString(name))
-                      ~ ("disk_size" -> JInt(new File(dbDir, name.replace("/", ":")).length()))
+                      ~ ("disk_size" -> JInt(container.diskSize))
                       ~ ("doc_count" -> JInt(db.takeWhile(e => comp.compare(e._1, ObjectKey(Map())) < 0).size))
                       ~ ("peer" -> JInt(s.id))
                       ~ Nil)

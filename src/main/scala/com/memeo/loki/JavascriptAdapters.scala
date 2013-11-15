@@ -16,7 +16,7 @@
 
 package com.memeo.loki
 
-import com.memeo.loki.api._
+import com.memeo.loki.api
 import java.util
 import javax.script._
 import net.liftweb.json.Printer.compact
@@ -26,7 +26,7 @@ object Javascript {
   val engine = new ScriptEngineManager().getEngineByName("javascript")
 }
 
-class JavascriptMapAdapter(mapFunc:String) extends MapFunction
+class JavascriptMapAdapter(mapFunc:String) extends api.MapFunction
 {
   val script = f"var thedoc = JSON.parse(documentJson);\n" +
     f"var emit = function(key, value) {\n" +
@@ -40,7 +40,7 @@ class JavascriptMapAdapter(mapFunc:String) extends MapFunction
     f"var mapfun = $mapFunc;\n" +
     f"mapfun(thedoc);"
 
-  override def map(doc:AST.ObjectValue, emitter:RowEmitter):Unit = {
+  override def map(doc:api.AST.ObjectValue, emitter:api.RowEmitter):Unit = {
     val bindings = Javascript.engine.createBindings()
     bindings.put("documentJson", compact(render(doc.toJValue)))
     bindings.put("emitter", emitter)
@@ -48,20 +48,20 @@ class JavascriptMapAdapter(mapFunc:String) extends MapFunction
   }
 }
 
-class JavascriptReduceAdapter(reduceFunc:String) extends ReduceFunction
+class JavascriptReduceAdapter(reduceFunc:String) extends api.ReduceFunction
 {
   val script = f"var reducefun = $reduceFunc;\n" +
     f"var result = JSON.stringify(reducefun(JSON.parse(keys), JSON.parse(values), rereduce));"
 
-  override def reduce(keys: util.List[AST.Value[_]], values: util.List[AST.Value[_]], rereduce: Boolean): AST.Value[_] = {
+  override def reduce(keys: util.List[api.AST.Value[_]], values: util.List[api.AST.Value[_]], rereduce: Boolean): api.AST.Value[_] = {
     val bindings = Javascript.engine.createBindings()
     keys match {
       case null => bindings.put("keys", "\"null\"")
-      case _ => bindings.put("keys", compact(render(new AST.ArrayValue(keys).toJValue)))
+      case _ => bindings.put("keys", compact(render(new api.AST.ArrayValue(keys).toJValue)))
     }
-    bindings.put("values", compact(render(new AST.ArrayValue(values).toJValue)))
+    bindings.put("values", compact(render(new api.AST.ArrayValue(values).toJValue)))
     bindings.put("rereduce", rereduce)
     Javascript.engine.eval(script, bindings)
-    AST.fromJson(bindings.get("result").asInstanceOf[String])
+    api.AST.fromJson(bindings.get("result").asInstanceOf[String])
   }
 }

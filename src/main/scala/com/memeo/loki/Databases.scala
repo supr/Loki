@@ -18,7 +18,7 @@ package com.memeo.loki
 
 import org.mapdb.{BTreeMap, DBMaker, DB}
 import collection.concurrent.TrieMap
-import java.io.{FilenameFilter, File}
+import java.io.{IOException, FilenameFilter, File}
 import collection.convert.WrapAsScala
 import com.google.common.cache.{RemovalNotification, RemovalListener, Cache, CacheBuilder}
 import java.util.concurrent.{ExecutionException, Callable}
@@ -28,8 +28,10 @@ import java.util
 import com.sleepycat.collections.StoredSortedMap
 import com.sleepycat.je
 import com.sleepycat.je.{DatabaseConfig, Environment, EnvironmentConfig}
+import java.nio.file.{FileVisitResult, FileVisitor, Path, Files}
+import java.nio.file.attribute.BasicFileAttributes
 
-class Database(val env:Environment, val name:String)(implicit val system:ActorSystem)
+class Database(val env:Environment, val path:Path, val name:String)(implicit val system:ActorSystem)
 {
   private val cache:Cache[String, StoredSortedMap[Key, Value]] = CacheBuilder
     .newBuilder()
@@ -75,9 +77,23 @@ class Database(val env:Environment, val name:String)(implicit val system:ActorSy
   def delete():Unit = {
     env.removeDatabase(null, name)
   }
+
+  def diskSize:Long = {
+    var size:Long = 0
+    Files.walkFileTree(path, new FileVisitor[Path] {
+      def visitFileFailed(file: Path, exc: IOException): FileVisitResult = FileVisitResult.TERMINATE
+      def visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult = {
+        size += attrs.size()
+        FileVisitResult.CONTINUE
+      }
+      def preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult = FileVisitResult.CONTINUE
+      def postVisitDirectory(dir: Path, exc: IOException): FileVisitResult = FileVisitResult.CONTINUE
+    })
+    size
+  }
 }
 
-class Databases(val dbdir: File)(implicit val system:ActorSystem)
+class Databases(val dbdir: Path)(implicit val system:ActorSystem)
 {
   import Databases.dbCache
 
@@ -86,22 +102,22 @@ class Databases(val dbdir: File)(implicit val system:ActorSystem)
       Some(dbCache.get(name, new Callable[Database]()
       {
         override def call():Database = {
-          val f = new File(dbdir, name.replace("/", ":"))
-          if (!f.exists()) {
+          val f = dbdir.resolve(name.replace("/", ":"))
+          if (!Files.exists(f)) {
             if (!create)
               throw new NoSuchElementException
           }
           try {
             Profiling.begin("create_new_db")
-            if (!f.mkdirs())
+            if (Files.createDirectories(f) == null)
               throw new NoSuchElementException("failed to create directory")
             val envConfig = new EnvironmentConfig()
             envConfig.setAllowCreate(create)
             envConfig.setTransactional(true)
             envConfig.setLocking(true)
             envConfig.setSharedCache(true)
-            val env = new Environment(f, envConfig)
-            new Database(env, name)
+            val env = new Environment(f.toFile, envConfig)
+            new Database(env, f, name)
           } finally {
             Profiling.end("create_new_db")
           }
@@ -122,9 +138,13 @@ class Databases(val dbdir: File)(implicit val system:ActorSystem)
 
   def delete(name: String): Unit = {
     dbCache.invalidate(name)
-    val dir = new File(dbdir, name)
-    dir.listFiles().foreach(f => f.delete())
-    dir.delete()
+    val dir = dbdir.resolve(name)
+    WrapAsScala.iterableAsScalaIterable(Files.newDirectoryStream(dir)).foreach(p => Files.delete(p))
+    Files.delete(dir)
+  }
+
+  def alldbs:List[String] = {
+    WrapAsScala.iterableAsScalaIterable(Files.newDirectoryStream(dbdir)).map(p => p.getFileName.toString).toList
   }
 }
 
@@ -137,5 +157,5 @@ object Databases
     .maximumSize(1024)
     .build()
 
-  def apply()(implicit dbdir: File, system:ActorSystem) = new Databases(dbdir)
+  def apply()(implicit dbdir: Path, system:ActorSystem) = new Databases(dbdir)
 }
